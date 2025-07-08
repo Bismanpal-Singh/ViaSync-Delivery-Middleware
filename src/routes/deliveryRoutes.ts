@@ -6,6 +6,9 @@ const router = Router();
 // Optimize delivery routes
 router.post('/optimize', DeliveryController.optimizeDelivery);
 
+// Optimize delivery routes from database
+router.post('/optimize-from-database', DeliveryController.optimizeDeliveryFromDatabase);
+
 // Get delivery quotes
 router.get('/quotes', DeliveryController.getDeliveryQuotes);
 

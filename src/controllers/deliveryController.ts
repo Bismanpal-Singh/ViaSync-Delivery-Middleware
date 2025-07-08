@@ -53,6 +53,45 @@ export const optimizeDelivery = async (req: Request, res: Response): Promise<voi
   }
 };
 
+export const optimizeDeliveryFromDatabase = async (req: Request, res: Response): Promise<void> => {
+  const { fromDate, toDate, status, numVehicles, depotAddress, limit } = req.body;
+
+  if (!numVehicles || numVehicles <= 0) {
+    res.status(400).json({
+      success: false,
+      error: 'numVehicles is required and must be positive'
+    });
+    return;
+  }
+
+  try {
+    console.log(`🚚 Optimizing routes from database with ${numVehicles} vehicles`);
+
+    const result = await deliveryService.optimizeDeliveryRoutesFromDatabase({
+      fromDate,
+      toDate,
+      status,
+      numVehicles,
+      depotAddress,
+      limit
+    });
+
+    res.json({
+      success: true,
+      data: result,
+      message: `Successfully optimized ${result.routes.length} routes for ${result.numVehiclesUsed} vehicles`
+    });
+
+  } catch (error) {
+    console.error('❌ Database route optimization failed:', error);
+    res.status(500).json({
+      success: false,
+      error: error instanceof Error ? error.message : 'Unknown error occurred',
+      message: 'Failed to optimize delivery routes from database'
+    });
+  }
+};
+
 export const getDeliveryQuotes = async (req: Request, res: Response): Promise<void> => {
   const status = req.query.status as string;
   const limit = req.query.limit ? parseInt(req.query.limit as string) : 10;

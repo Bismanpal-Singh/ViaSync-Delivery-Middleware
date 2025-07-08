@@ -157,24 +157,25 @@ export class DeliveryService {
         throw new Error('Failed to get distance and time matrices');
       }
       
-      const distanceMatrix = matrixResult.distances.map(row => row.map(d => d / 1000)); // Convert to km
-      const timeMatrix = matrixResult.matrix.map(row => row.map(t => Math.round(t / 60))); // Convert to minutes
+      // Keep distances in meters and times in seconds for OR-Tools consistency
+      const distanceMatrix = matrixResult.distances; // Already in meters
+      const timeMatrix = matrixResult.matrix; // Already in seconds
 
       // Debug: Print sample of distance and time matrices
-      console.log('🧮 Distance matrix (km):', JSON.stringify(distanceMatrix, null, 2));
-      console.log('⏱️ Time matrix (min):', JSON.stringify(timeMatrix, null, 2));
+      console.log('🧮 Distance matrix (meters):', JSON.stringify(distanceMatrix, null, 2));
+      console.log('⏱️ Time matrix (seconds):', JSON.stringify(timeMatrix, null, 2));
 
-      // Step 3: Convert time windows to minutes from midnight
-      const timeWindows: [number, number][] = [depotTimeWindow];
+      // Step 3: Convert time windows to seconds from midnight
+      const timeWindows: [number, number][] = [[depotTimeWindow[0] * 60, depotTimeWindow[1] * 60]]; // Convert minutes to seconds
 
       for (const delivery of request.deliveries) {
         const startMinutes = this.timeToMinutes(delivery.timeWindow.start);
         const endMinutes = this.timeToMinutes(delivery.timeWindow.end);
-        timeWindows.push([startMinutes, endMinutes]);
+        timeWindows.push([startMinutes * 60, endMinutes * 60]); // Convert minutes to seconds
       }
 
       // Debug: Print time windows
-      console.log('🕰️ Time windows (minutes from midnight):', JSON.stringify(timeWindows));
+      console.log('🕰️ Time windows (seconds from midnight):', JSON.stringify(timeWindows));
 
       // Step 4: Prepare data for OR-Tools solver
       const solverData: VRPTWData = {
@@ -236,15 +237,15 @@ export class DeliveryService {
         return {
           vehicleId: solverRoute.vehicle_id + 1,
           stops,
-          totalDistance: solverRoute.distance,
-          totalTime: solverRoute.time
+          totalDistance: Math.round(solverRoute.distance), // Distance in meters
+          totalTime: Math.round(solverRoute.time / 60) // Convert seconds to minutes
         };
       });
 
       return {
         routes,
-        totalDistance: solverResult.total_distance || 0,
-        totalTime: solverResult.total_time || 0,
+        totalDistance: Math.round(solverResult.total_distance || 0), // Distance in meters
+        totalTime: Math.round((solverResult.total_time || 0) / 60), // Convert seconds to minutes
         numVehiclesUsed: solverResult.num_vehicles_used || routes.length
       };
 
@@ -255,14 +256,91 @@ export class DeliveryService {
   }
 
   private calculateArrivalTime(route: any, stopIndex: number, timeMatrix: number[][]): number {
-    // Calculate cumulative travel time to this stop
+    // Calculate cumulative travel time to this stop (in seconds)
     let totalTime = 0;
     for (let i = 1; i <= stopIndex; i++) {
       const fromNode = route.route[i - 1];
       const toNode = route.route[i];
       totalTime += timeMatrix[fromNode][toNode];
     }
-    return totalTime;
+    // Convert seconds to minutes for display
+    return Math.round(totalTime / 60);
+  }
+
+  /**
+   * Optimize delivery routes using real delivery data from Supabase
+   */
+  async optimizeDeliveryRoutesFromDatabase(params: {
+    fromDate?: string;
+    toDate?: string;
+    status?: string;
+    numVehicles: number;
+    depotAddress?: string;
+    limit?: number;
+  }): Promise<DeliveryResult> {
+    try {
+      console.log(`🚚 Optimizing delivery routes from database with ${params.numVehicles} vehicles`);
+
+      // Step 1: Get real deliveries from Supabase
+      const deliveries = await this.supabaseService.getDeliveries({
+        fromDate: params.fromDate,
+        toDate: params.toDate,
+        status: params.status,
+        limit: params.limit || 100 // Use provided limit or default to 100
+      });
+
+      if (deliveries.length === 0) {
+        throw new Error('No deliveries found for the specified criteria');
+      }
+
+      console.log(`📦 Found ${deliveries.length} deliveries to optimize`);
+
+      // Step 2: Get depot address (shop location)
+      const shopLocation = await this.supabaseService.getShopLocation();
+      const depotAddress = params.depotAddress || shopLocation;
+
+      // Step 3: Convert deliveries to optimization format
+      const deliveryLocations: DeliveryLocation[] = deliveries.map((delivery, index) => {
+        // Handle time windows with minimum width
+        let startTime = delivery.priority_start_time || '09:00';
+        let endTime = delivery.priority_end_time || '17:00';
+        
+        // If start and end times are the same, it means "any time after start time"
+        if (startTime === endTime) {
+          endTime = '23:59'; // Set to end of day
+        }
+        
+        // Ensure minimum 30-minute window
+        const startMinutes = this.timeToMinutes(startTime);
+        const endMinutes = this.timeToMinutes(endTime);
+        if (endMinutes - startMinutes < 30) {
+          endTime = this.minutesToTime(Math.min(1440, startMinutes + 30));
+        }
+        
+        return {
+          id: delivery.id.toString(),
+          address: this.supabaseService.formatDeliveryAddress(delivery),
+          timeWindow: {
+            start: startTime,
+            end: endTime
+          }
+        };
+      });
+
+      // Step 4: Create optimization request
+      const optimizationRequest: DeliveryRequest = {
+        depotAddress,
+        deliveries: deliveryLocations,
+        numVehicles: params.numVehicles
+      };
+
+      // Step 5: Call the existing optimization method
+      return await this.optimizeDeliveryRoutes(optimizationRequest);
+
+    } catch (error) {
+      console.error('Error optimizing delivery routes from database:', error);
+      throw error;
+    }
   }
 
   /**

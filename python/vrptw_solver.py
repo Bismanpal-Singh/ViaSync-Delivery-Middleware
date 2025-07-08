@@ -16,6 +16,9 @@ def create_data_model(input_data):
 
 
 def solve_vrptw(data):
+    print(f"🔍 Solver input: {len(data['distance_matrix'])} locations, {data['num_vehicles']} vehicles", file=sys.stderr)
+    print(f"🕰️ Time windows: {data['time_windows']}", file=sys.stderr)
+    
     manager = pywrapcp.RoutingIndexManager(
         len(data["distance_matrix"]),
         data["num_vehicles"],
@@ -39,26 +42,37 @@ def solve_vrptw(data):
 
     time_cb_idx = routing.RegisterTransitCallback(time_callback)
 
+    # Add time dimension with more lenient constraints
     routing.AddDimension(
         time_cb_idx,
-        slack_max=30,         # waiting time
-        capacity=480,         # max time per vehicle (in minutes)
+        slack_max=1800,       # 30 minutes waiting time
+        capacity=86400,       # 24 hours max time per vehicle (more lenient)
         fix_start_cumul_to_zero=False,
         name="Time"
     )
 
     time_dim = routing.GetDimensionOrDie("Time")
 
-        # Apply time window constraints
+    # Apply time window constraints for non-depot locations
     for location_idx, (start, end) in enumerate(data["time_windows"]):
+        if location_idx == data["depot"]:
+            continue
         index = manager.NodeToIndex(location_idx)
         time_dim.CumulVar(index).SetRange(start, end)
 
-    # ✅ Apply depot time window to all vehicle start nodes
+    # Apply depot time window to all vehicle start nodes
     depot_start, depot_end = data["time_windows"][data["depot"]]
     for vehicle_id in range(data["num_vehicles"]):
         index = routing.Start(vehicle_id)
         time_dim.CumulVar(index).SetRange(depot_start, depot_end)
+
+    # Allow dropping nodes (disjunctions) to handle infeasible time windows
+    penalty = 1000000  # High penalty for dropping nodes
+    for location_idx in range(len(data["distance_matrix"])):
+        if location_idx == data["depot"]:
+            continue
+        index = manager.NodeToIndex(location_idx)
+        routing.AddDisjunction([index], penalty)
 
     # Solver params
     search_params = pywrapcp.DefaultRoutingSearchParameters()
@@ -66,11 +80,13 @@ def solve_vrptw(data):
         routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC)
     search_params.local_search_metaheuristic = (
         routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH)
-    search_params.time_limit.seconds = 10
+    search_params.time_limit.seconds = 15
 
+    print("🔧 Solving with disjunctions enabled...", file=sys.stderr)
     solution = routing.SolveWithParameters(search_params)
 
     if not solution:
+        print("❌ No feasible solution found", file=sys.stderr)
         return {"error": "No feasible solution found."}
 
     # Extract results
@@ -79,6 +95,9 @@ def solve_vrptw(data):
     total_time = 0
 
     for v in range(data["num_vehicles"]):
+        if not routing.IsVehicleUsed(solution, v):
+            continue
+            
         index = routing.Start(v)
         route = []
         arrival_times = []
@@ -95,7 +114,9 @@ def solve_vrptw(data):
         route.append(node)
         arrival_times.append(time)
 
-        if len(route) > 2:
+        print(f"Vehicle {v} route: {route}", file=sys.stderr)
+        
+        if len(route) > 2:  # At least depot -> depot
             route_distance = sum(
                 data["distance_matrix"][route[i]][route[i + 1]]
                 for i in range(len(route) - 1)
@@ -113,6 +134,11 @@ def solve_vrptw(data):
             total_distance += route_distance
             total_time += route_time
 
+    if not routes:
+        print("❌ No routes found after solving", file=sys.stderr)
+        return {"error": "No routes found after solving"}
+
+    print(f"✅ Found {len(routes)} routes", file=sys.stderr)
     return {
         "routes": routes,
         "total_distance": total_distance,
