@@ -57,7 +57,9 @@ export class DistanceMatrixService {
 
         row.elements.forEach((element: any, j: number) => {
           if (element.status === 'OK') {
-            matrix[i][j] = element.duration.value;    // in seconds
+            // Use duration_in_traffic for real-time traffic data, fallback to duration if not available
+            const travelTime = element.duration_in_traffic?.value || element.duration.value;
+            matrix[i][j] = travelTime;    // in seconds
             distances[i][j] = element.distance.value; // in meters
           } else {
             const fallback = this.estimateFallbackDistance(locations[i], locations[j]);

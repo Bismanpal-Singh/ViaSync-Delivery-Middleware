@@ -35,10 +35,16 @@ def solve_vrptw(data):
     distance_cb_idx = routing.RegisterTransitCallback(distance_callback)
     routing.SetArcCostEvaluatorOfAllVehicles(distance_cb_idx)
 
-    # Time callback
+    # Time callback with service time included
     def time_callback(from_idx, to_idx):
         f, t = manager.IndexToNode(from_idx), manager.IndexToNode(to_idx)
-        return data["time_matrix"][f][t]
+        travel_time = data["time_matrix"][f][t]
+        
+        # Add 10 minutes (600 seconds) service time at delivery locations
+        if t != data["depot"]:
+            travel_time += 600
+        
+        return travel_time
 
     time_cb_idx = routing.RegisterTransitCallback(time_callback)
 
