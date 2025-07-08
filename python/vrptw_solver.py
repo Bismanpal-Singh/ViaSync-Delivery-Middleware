@@ -49,10 +49,16 @@ def solve_vrptw(data):
 
     time_dim = routing.GetDimensionOrDie("Time")
 
-    # Apply time window constraints
+        # Apply time window constraints
     for location_idx, (start, end) in enumerate(data["time_windows"]):
         index = manager.NodeToIndex(location_idx)
         time_dim.CumulVar(index).SetRange(start, end)
+
+    # ✅ Apply depot time window to all vehicle start nodes
+    depot_start, depot_end = data["time_windows"][data["depot"]]
+    for vehicle_id in range(data["num_vehicles"]):
+        index = routing.Start(vehicle_id)
+        time_dim.CumulVar(index).SetRange(depot_start, depot_end)
 
     # Solver params
     search_params = pywrapcp.DefaultRoutingSearchParameters()

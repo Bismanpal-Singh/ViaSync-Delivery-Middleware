@@ -118,11 +118,8 @@ export const getAllDeliveries = async (req: Request, res: Response): Promise<voi
       offset
     });
 
-    res.json({
-      success: true,
-      data: deliveries,
-      message: `Retrieved ${deliveries.length} deliveries`
-    });
+    // Return a raw array as expected by the frontend
+    res.json(deliveries);
 
   } catch (error) {
     console.error('❌ Failed to get deliveries:', error);

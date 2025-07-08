@@ -25,10 +25,17 @@ export interface DeliveryLocation {
 }
 
 export interface DeliveryRequest {
-  depotAddress: string;
+  depotAddress: string | {
+    address: string;
+    timeWindow?: {
+      start: string;
+      end: string;
+    };
+  };
   deliveries: DeliveryLocation[];
   numVehicles: number;
 }
+
 
 export interface DeliveryRoute {
   vehicleId: number;
@@ -104,10 +111,32 @@ export class DeliveryService {
       console.log(`🚚 Optimizing delivery routes for ${request.deliveries.length} deliveries with ${request.numVehicles} vehicles`);
 
       // Step 1: Geocode all addresses
-      const allAddresses = [request.depotAddress, ...request.deliveries.map(d => d.address)];
+      let depotAddressStr: string;
+      let depotTimeWindow: [number, number] = [0, 1440]; // default full day
+
+      if (typeof request.depotAddress === 'string') {
+        depotAddressStr = request.depotAddress;
+      } else {
+        depotAddressStr = request.depotAddress.address;
+        if (request.depotAddress.timeWindow) {
+          depotTimeWindow = [
+            this.timeToMinutes(request.depotAddress.timeWindow.start),
+            this.timeToMinutes(request.depotAddress.timeWindow.end)
+          ];
+        }
+      }
+
+      const allAddresses = [depotAddressStr, ...request.deliveries.map(d => d.address)];
+
       const geocodedAddresses = await Promise.all(
         allAddresses.map(addr => this.geocodingService.geocodeAddress(addr))
       );
+
+      // Debug: Print geocoded coordinates
+      console.log('🗺️ Geocoded addresses:');
+      geocodedAddresses.forEach((coords, idx) => {
+        console.log(`   [${idx}] ${allAddresses[idx]} =>`, coords);
+      });
 
       // Check if all addresses were geocoded successfully
       const failedGeocoding = geocodedAddresses.findIndex(coords => !coords);
@@ -131,17 +160,21 @@ export class DeliveryService {
       const distanceMatrix = matrixResult.distances.map(row => row.map(d => d / 1000)); // Convert to km
       const timeMatrix = matrixResult.matrix.map(row => row.map(t => Math.round(t / 60))); // Convert to minutes
 
+      // Debug: Print sample of distance and time matrices
+      console.log('🧮 Distance matrix (km):', JSON.stringify(distanceMatrix, null, 2));
+      console.log('⏱️ Time matrix (min):', JSON.stringify(timeMatrix, null, 2));
+
       // Step 3: Convert time windows to minutes from midnight
-      const timeWindows: [number, number][] = [
-        // Depot time window (flexible - allow early start)
-        [0, 480] // 8 hours (8 AM to 4 PM)
-      ];
+      const timeWindows: [number, number][] = [depotTimeWindow];
 
       for (const delivery of request.deliveries) {
         const startMinutes = this.timeToMinutes(delivery.timeWindow.start);
         const endMinutes = this.timeToMinutes(delivery.timeWindow.end);
         timeWindows.push([startMinutes, endMinutes]);
       }
+
+      // Debug: Print time windows
+      console.log('🕰️ Time windows (minutes from midnight):', JSON.stringify(timeWindows));
 
       // Step 4: Prepare data for OR-Tools solver
       const solverData: VRPTWData = {
@@ -151,6 +184,10 @@ export class DeliveryService {
         time_matrix: timeMatrix,
         time_windows: timeWindows
       };
+
+      console.log('🧪 Debug Preview:');
+      console.log('   ➤ Sample travel time (0→1):', timeMatrix[0][1]);
+      console.log('   ➤ Sample time window:', timeWindows[1]);
 
       // Debug: Log the data being sent to solver
       console.log('🔍 Solver data:', JSON.stringify(solverData, null, 2));
@@ -173,9 +210,15 @@ export class DeliveryService {
             // Depot
             return {
               locationId: 'depot',
-              address: request.depotAddress,
+              address: typeof request.depotAddress === 'string' 
+              ? request.depotAddress 
+              : request.depotAddress.address,
+
               eta: this.minutesToTime(0), // Start time
-              timeWindow: { start: '08:00', end: '16:00' }
+              timeWindow: {
+                start: this.minutesToTime(depotTimeWindow[0]),
+                end: this.minutesToTime(depotTimeWindow[1])
+              }              
             };
           } else {
             // Delivery location

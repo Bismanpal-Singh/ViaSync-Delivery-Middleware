@@ -13,7 +13,7 @@ router.get('/quotes', DeliveryController.getDeliveryQuotes);
 router.get('/health', DeliveryController.healthCheck);
 
 // Get all deliveries
-router.get('/', DeliveryController.getAllDeliveries);
+router.get('/deliveries', DeliveryController.getAllDeliveries);
 
 // Get a single delivery by ID
 router.get('/:id', DeliveryController.getDeliveryById);
