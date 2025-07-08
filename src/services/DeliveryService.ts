@@ -112,7 +112,7 @@ export class DeliveryService {
 
       // Step 1: Geocode all addresses
       let depotAddressStr: string;
-      let depotTimeWindow: [number, number] = [0, 1440]; // default full day
+      let depotTimeWindow: [number, number] = [420, 1440]; // default 7:00 AM to midnight
 
       if (typeof request.depotAddress === 'string') {
         depotAddressStr = request.depotAddress;
@@ -215,7 +215,7 @@ export class DeliveryService {
               ? request.depotAddress 
               : request.depotAddress.address,
 
-              eta: this.minutesToTime(0), // Start time
+              eta: this.minutesToTime(solverRoute.arrival_times?.[stopIndex] || 0), // Use actual solver time
               timeWindow: {
                 start: this.minutesToTime(depotTimeWindow[0]),
                 end: this.minutesToTime(depotTimeWindow[1])
@@ -256,15 +256,11 @@ export class DeliveryService {
   }
 
   private calculateArrivalTime(route: any, stopIndex: number, timeMatrix: number[][]): number {
-    // Calculate cumulative travel time to this stop (in seconds)
-    let totalTime = 0;
-    for (let i = 1; i <= stopIndex; i++) {
-      const fromNode = route.route[i - 1];
-      const toNode = route.route[i];
-      totalTime += timeMatrix[fromNode][toNode];
-    }
-    // Convert seconds to minutes for display
-    return Math.round(totalTime / 60);
+    // Get the actual arrival time from the solver (in seconds)
+    const arrivalTimeSeconds = route.arrival_times?.[stopIndex] || 0;
+    
+    // Convert to minutes for display
+    return Math.round(arrivalTimeSeconds / 60);
   }
 
   /**
@@ -329,7 +325,13 @@ export class DeliveryService {
 
       // Step 4: Create optimization request
       const optimizationRequest: DeliveryRequest = {
-        depotAddress,
+        depotAddress: {
+          address: depotAddress,
+          timeWindow: {
+            start: "07:00",
+            end: "23:59"
+          }
+        },
         deliveries: deliveryLocations,
         numVehicles: params.numVehicles
       };

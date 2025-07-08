@@ -74,6 +74,11 @@ def solve_vrptw(data):
         index = manager.NodeToIndex(location_idx)
         routing.AddDisjunction([index], penalty)
 
+    # Minimize start and end times for each vehicle (forces earliest feasible start)
+    for vehicle_id in range(data["num_vehicles"]):
+        routing.AddVariableMinimizedByFinalizer(time_dim.CumulVar(routing.Start(vehicle_id)))
+        routing.AddVariableMinimizedByFinalizer(time_dim.CumulVar(routing.End(vehicle_id)))
+
     # Solver params
     search_params = pywrapcp.DefaultRoutingSearchParameters()
     search_params.first_solution_strategy = (
