@@ -48,6 +48,7 @@ export interface DeliveryRoute {
       end: string;
     };
   }>;
+  departureTime: string;
   totalDistance: number;
   totalTime: number;
 }
@@ -237,6 +238,7 @@ export class DeliveryService {
         return {
           vehicleId: solverRoute.vehicle_id + 1,
           stops,
+          departureTime: this.calculateDepartureTime(solverRoute, timeMatrix),
           totalDistance: Math.round(solverRoute.distance), // Distance in meters
           totalTime: Math.round(solverRoute.time / 60) // Convert seconds to minutes
         };
@@ -261,6 +263,29 @@ export class DeliveryService {
     
     // Convert to minutes for display
     return Math.round(arrivalTimeSeconds / 60);
+  }
+
+  private calculateDepartureTime(route: any, timeMatrix: number[][]): string {
+    // Find the first delivery (first non-depot stop)
+    const firstDeliveryIndex = route.route.findIndex((node: number) => node !== 0);
+    if (firstDeliveryIndex === -1 || firstDeliveryIndex === 0) {
+      return 'N/A'; // No delivery found or first stop is depot
+    }
+
+    // Get the first delivery node
+    const firstDeliveryNode = route.route[firstDeliveryIndex];
+    
+    // Calculate travel time from depot to first delivery (including service time)
+    const travelTimeToFirstDelivery = timeMatrix[0][firstDeliveryNode] + 600; // Add 10 min service time
+    
+    // Get the arrival time at first delivery
+    const arrivalTimeAtFirstDelivery = route.arrival_times?.[firstDeliveryIndex] || 0;
+    
+    // Calculate departure time: arrival time - travel time
+    const departureTimeSeconds = arrivalTimeAtFirstDelivery - travelTimeToFirstDelivery;
+    const departureTimeMinutes = Math.round(departureTimeSeconds / 60);
+
+    return this.minutesToTime(departureTimeMinutes);
   }
 
   /**
