@@ -2,18 +2,10 @@ import { SupabaseService } from './SupabaseService';
 import { DistanceMatrixService } from './DistanceMatrixService';
 import { GeocodingService } from './GeocodingService';
 import { OrToolsService, VRPTWData, VRPTWResult } from './OrToolsService';
+import { RouteStorageService } from './RouteStorageService';
+import { v4 as uuidv4 } from 'uuid';
 
-interface Delivery {
-  deliveryId: number;
-  orderNumber: string;
-  customerName: string;
-  deliveryAddress: string;
-  deliveryDate: string;
-  status: string;
-  priority: string;
-  latitude?: number;
-  longitude?: number;
-}
+
 
 export interface DeliveryLocation {
   id: string;
@@ -63,26 +55,14 @@ export interface DeliveryResult {
 
 
 
-interface DeliveryQuoteResponse {
-  success: boolean;
-  data: {
-    deliveries: Delivery[];
-    summary: {
-      totalDeliveries: number;
-      deliveriesWithQuotes: number;
-      totalUberCost: number;
-      averageUberCost: number;
-    };
-    timestamp: string;
-  };
-  message: string;
-}
+
 
 export class DeliveryService {
   private supabaseService: SupabaseService;
   private distanceMatrixService: DistanceMatrixService;
   private geocodingService: GeocodingService;
   private orToolsService: OrToolsService;
+  private routeStorageService: RouteStorageService;
 
   constructor() {
     // Initialize with environment variables
@@ -94,6 +74,7 @@ export class DeliveryService {
     this.distanceMatrixService = new DistanceMatrixService();
     this.geocodingService = new GeocodingService();
     this.orToolsService = new OrToolsService();
+    this.routeStorageService = new RouteStorageService();
   }
 
   private timeToMinutes(timeStr: string): number {
@@ -107,7 +88,32 @@ export class DeliveryService {
     return `${hours.toString().padStart(2, '0')}:${mins.toString().padStart(2, '0')}`;
   }
 
-  async optimizeDeliveryRoutes(request: DeliveryRequest): Promise<DeliveryResult> {
+  private getCustomStartTime(startDate?: string, startTime?: string): { date: string; time: string; minutesFromMidnight: number } {
+    const now = new Date();
+    
+    // Use provided date or current date
+    const targetDate = startDate ? new Date(startDate) : now;
+    
+    // Use provided time or current time
+    let targetTime: string;
+    if (startTime) {
+      targetTime = startTime;
+    } else {
+      targetTime = this.minutesToTime(now.getHours() * 60 + now.getMinutes());
+    }
+    
+    // Calculate minutes from midnight for the target time
+    const [hours, minutes] = targetTime.split(':').map(Number);
+    const minutesFromMidnight = hours * 60 + minutes;
+    
+    return {
+      date: targetDate.toISOString().split('T')[0],
+      time: targetTime,
+      minutesFromMidnight
+    };
+  }
+
+  async optimizeDeliveryRoutes(request: DeliveryRequest, customStartTime?: { date: string; time: string; minutesFromMidnight: number }): Promise<DeliveryResult> {
     try {
       console.log(`🚚 Optimizing delivery routes for ${request.deliveries.length} deliveries with ${request.numVehicles} vehicles`);
 
@@ -125,6 +131,12 @@ export class DeliveryService {
             this.timeToMinutes(request.depotAddress.timeWindow.end)
           ];
         }
+      }
+
+      // Override depot time window if custom start time is provided
+      if (customStartTime) {
+        console.log(`⏰ Using custom start time: ${customStartTime.date} at ${customStartTime.time}`);
+        depotTimeWindow = [customStartTime.minutesFromMidnight, 1440]; // From custom start time to end of day
       }
 
       const allAddresses = [depotAddressStr, ...request.deliveries.map(d => d.address)];
@@ -216,7 +228,8 @@ export class DeliveryService {
               ? request.depotAddress 
               : request.depotAddress.address,
 
-              eta: this.minutesToTime(solverRoute.arrival_times?.[stopIndex] || 0), // Use actual solver time
+              eta: stopIndex === 0 ? this.calculateDepartureTime(solverRoute, timeMatrix) : 
+                   this.minutesToTime(this.calculateArrivalTime(solverRoute, stopIndex, timeMatrix)),
               timeWindow: {
                 start: this.minutesToTime(depotTimeWindow[0]),
                 end: this.minutesToTime(depotTimeWindow[1])
@@ -238,18 +251,47 @@ export class DeliveryService {
         return {
           vehicleId: solverRoute.vehicle_id + 1,
           stops,
-          departureTime: this.calculateDepartureTime(solverRoute, timeMatrix),
+          departureTime: this.calculateDepartureTime(solverRoute, timeMatrix, customStartTime),
           totalDistance: Math.round(solverRoute.distance), // Distance in meters
           totalTime: Math.round(solverRoute.time / 60) // Convert seconds to minutes
         };
       });
 
-      return {
+      const result = {
         routes,
         totalDistance: Math.round(solverResult.total_distance || 0), // Distance in meters
         totalTime: Math.round((solverResult.total_time || 0) / 60), // Convert seconds to minutes
         numVehiclesUsed: solverResult.num_vehicles_used || routes.length
       };
+
+      // Automatically store the optimized route
+      try {
+        const routeId = uuidv4();
+        const routeName = `Route ${new Date().toLocaleDateString()} - ${request.deliveries.length} deliveries`;
+        const deliveryDate = new Date().toISOString().split('T')[0];
+        const depotAddress = typeof request.depotAddress === 'string' 
+          ? request.depotAddress 
+          : request.depotAddress.address;
+
+        await this.routeStorageService.storeRoute({
+          id: routeId,
+          routeName,
+          deliveryDate,
+          depotAddress,
+          numVehicles: request.numVehicles,
+          numVehiclesUsed: result.numVehiclesUsed,
+          totalDistance: result.totalDistance,
+          totalTime: result.totalTime,
+          routes: result.routes
+        });
+
+        console.log(`💾 Route stored with ID: ${routeId}`);
+      } catch (storageError) {
+        console.warn('⚠️ Failed to store route:', storageError);
+        // Don't fail the optimization if storage fails
+      }
+
+      return result;
 
     } catch (error) {
       console.error('Error optimizing delivery routes:', error);
@@ -265,7 +307,12 @@ export class DeliveryService {
     return Math.round(arrivalTimeSeconds / 60);
   }
 
-  private calculateDepartureTime(route: any, timeMatrix: number[][]): string {
+  private calculateDepartureTime(route: any, timeMatrix: number[][], customStartTime?: { date: string; time: string; minutesFromMidnight: number }): string {
+    // If custom start time is provided, use it directly
+    if (customStartTime) {
+      return customStartTime.time;
+    }
+
     // Find the first delivery (first non-depot stop)
     const firstDeliveryIndex = route.route.findIndex((node: number) => node !== 0);
     if (firstDeliveryIndex === -1 || firstDeliveryIndex === 0) {
@@ -298,6 +345,9 @@ export class DeliveryService {
     numVehicles: number;
     depotAddress?: string;
     limit?: number;
+    offset?: number;
+    startDate?: string;
+    startTime?: string;
   }): Promise<DeliveryResult> {
     try {
       console.log(`🚚 Optimizing delivery routes from database with ${params.numVehicles} vehicles`);
@@ -307,7 +357,8 @@ export class DeliveryService {
         fromDate: params.fromDate,
         toDate: params.toDate,
         status: params.status,
-        limit: params.limit || 100 // Use provided limit or default to 100
+        limit: params.limit || 100, // Use provided limit or default to 100
+        offset: params.offset || 0  // Use provided offset or default to 0
       });
 
       if (deliveries.length === 0) {
@@ -348,7 +399,12 @@ export class DeliveryService {
         };
       });
 
-      // Step 4: Create optimization request
+      // Step 4: Get custom start time if provided
+      const customStartTime = params.startDate || params.startTime ? 
+        this.getCustomStartTime(params.startDate, params.startTime) : 
+        undefined;
+
+      // Step 5: Create optimization request
       const optimizationRequest: DeliveryRequest = {
         depotAddress: {
           address: depotAddress,
@@ -361,8 +417,43 @@ export class DeliveryService {
         numVehicles: params.numVehicles
       };
 
-      // Step 5: Call the existing optimization method
-      return await this.optimizeDeliveryRoutes(optimizationRequest);
+      // Step 6: Call the existing optimization method with custom start time
+      const result = await this.optimizeDeliveryRoutes(optimizationRequest, customStartTime);
+
+      // Automatically store the route with more specific details
+      try {
+        const routeId = uuidv4();
+        const routeName = `Database Route ${params.fromDate || 'all'} - ${deliveries.length} deliveries`;
+        const deliveryDate = customStartTime?.date || params.fromDate || new Date().toISOString().split('T')[0];
+        const depotAddressStr = depotAddress;
+
+        // Add start time info to route name if custom start time is used
+        const finalRouteName = customStartTime ? 
+          `${routeName} (Start: ${customStartTime.time})` : 
+          routeName;
+
+        await this.routeStorageService.storeRoute({
+          id: routeId,
+          routeName: finalRouteName,
+          deliveryDate,
+          depotAddress,
+          numVehicles: params.numVehicles,
+          numVehiclesUsed: result.numVehiclesUsed,
+          totalDistance: result.totalDistance,
+          totalTime: result.totalTime,
+          routes: result.routes
+        });
+
+        console.log(`💾 Database route stored with ID: ${routeId}`);
+        if (customStartTime) {
+          console.log(`⏰ Route uses custom start time: ${customStartTime.date} at ${customStartTime.time}`);
+        }
+      } catch (storageError) {
+        console.warn('⚠️ Failed to store database route:', storageError);
+        // Don't fail the optimization if storage fails
+      }
+
+      return result;
 
     } catch (error) {
       console.error('Error optimizing delivery routes from database:', error);
@@ -370,79 +461,5 @@ export class DeliveryService {
     }
   }
 
-  /**
-   * Get delivery quotes (legacy method)
-   */
-  async getDeliveryQuotes(status?: string, limit?: number): Promise<DeliveryQuoteResponse> {
-    try {
-      console.log('📦 Fetching deliveries from database...');
-      
-      // Get deliveries from database
-      const deliveries = await this.supabaseService.getDeliveries({
-        status,
-        limit
-      });
-      
-      console.log(`✅ Found ${deliveries.length} deliveries`);
-      
-      // Format deliveries for response
-      const formattedDeliveries: Delivery[] = deliveries.map(delivery => ({
-        deliveryId: delivery.id,
-        orderNumber: delivery.order_number || 'N/A',
-        customerName: delivery.customer_name,
-        deliveryAddress: this.supabaseService.formatDeliveryAddress(delivery),
-        deliveryDate: delivery.delivery_date || 'N/A',
-        status: delivery.status || 'Unknown',
-        priority: delivery.priority || 'N/A'
-      }));
 
-      // Calculate summary
-      const summary = {
-        totalDeliveries: formattedDeliveries.length,
-        deliveriesWithQuotes: 0, // No quotes available since Uber is disabled
-        totalUberCost: 0,
-        averageUberCost: 0
-      };
-
-      console.log('✅ Delivery quote retrieval completed successfully');
-      console.log(`📊 Summary: ${summary.deliveriesWithQuotes}/${summary.totalDeliveries} deliveries have quotes`);
-      console.log(`💰 Total Uber cost: $${summary.totalUberCost.toFixed(2)}`);
-
-      return {
-        success: true,
-        data: {
-          deliveries: formattedDeliveries,
-          summary,
-          timestamp: new Date().toISOString()
-        },
-        message: `Retrieved ${formattedDeliveries.length} delivery quotes`
-      };
-    } catch (error) {
-      console.error('❌ Failed to get delivery quotes:', error);
-      throw new Error('Failed to get delivery quotes');
-    }
-  }
-
-  /**
-   * Get raw deliveries (legacy method)
-   */
-  async getDeliveriesRaw(status?: string, limit?: number): Promise<any[]> {
-    try {
-      console.log('📦 Fetching raw deliveries from database...');
-      
-      // Get raw deliveries from database
-      const deliveries = await this.supabaseService.getDeliveries({
-        status,
-        limit
-      });
-      
-      console.log(`✅ Found ${deliveries.length} raw deliveries`);
-      
-      // Return raw delivery data without formatting
-      return deliveries;
-    } catch (error) {
-      console.error('❌ Failed to get raw deliveries:', error);
-      throw new Error('Failed to get raw deliveries');
-    }
-  }
 } 

@@ -9,8 +9,7 @@ router.post('/optimize', DeliveryController.optimizeDelivery);
 // Optimize delivery routes from database
 router.post('/optimize-from-database', DeliveryController.optimizeDeliveryFromDatabase);
 
-// Get delivery quotes
-router.get('/quotes', DeliveryController.getDeliveryQuotes);
+
 
 // Health check
 router.get('/health', DeliveryController.healthCheck);

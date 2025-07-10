@@ -54,7 +54,7 @@ export const optimizeDelivery = async (req: Request, res: Response): Promise<voi
 };
 
 export const optimizeDeliveryFromDatabase = async (req: Request, res: Response): Promise<void> => {
-  const { fromDate, toDate, status, numVehicles, depotAddress, limit } = req.body;
+  const { fromDate, toDate, status, numVehicles, depotAddress, limit, offset, startDate, startTime } = req.body;
 
   if (!numVehicles || numVehicles <= 0) {
     res.status(400).json({
@@ -64,8 +64,29 @@ export const optimizeDeliveryFromDatabase = async (req: Request, res: Response):
     return;
   }
 
+  // Validate startTime format if provided
+  if (startTime && !/^([01]?[0-9]|2[0-3]):[0-5][0-9]$/.test(startTime)) {
+    res.status(400).json({
+      success: false,
+      error: 'startTime must be in HH:MM format (e.g., "08:30")'
+    });
+    return;
+  }
+
+  // Validate startDate format if provided
+  if (startDate && !/^\d{4}-\d{2}-\d{2}$/.test(startDate)) {
+    res.status(400).json({
+      success: false,
+      error: 'startDate must be in YYYY-MM-DD format (e.g., "2024-01-15")'
+    });
+    return;
+  }
+
   try {
     console.log(`🚚 Optimizing routes from database with ${numVehicles} vehicles`);
+    if (startDate || startTime) {
+      console.log(`⏰ Using custom start time: ${startDate || 'today'} at ${startTime || 'now'}`);
+    }
 
     const result = await deliveryService.optimizeDeliveryRoutesFromDatabase({
       fromDate,
@@ -73,7 +94,10 @@ export const optimizeDeliveryFromDatabase = async (req: Request, res: Response):
       status,
       numVehicles,
       depotAddress,
-      limit
+      limit,
+      offset,
+      startDate,
+      startTime
     });
 
     res.json({
@@ -92,21 +116,7 @@ export const optimizeDeliveryFromDatabase = async (req: Request, res: Response):
   }
 };
 
-export const getDeliveryQuotes = async (req: Request, res: Response): Promise<void> => {
-  const status = req.query.status as string;
-  const limit = req.query.limit ? parseInt(req.query.limit as string) : 10;
 
-  try {
-    const result = await deliveryService.getDeliveryQuotes(status, limit);
-    res.json(result);
-  } catch (error) {
-    console.error('❌ Failed to get delivery quotes:', error);
-    res.status(500).json({
-      success: false,
-      error: error instanceof Error ? error.message : 'Unknown error occurred'
-    });
-  }
-};
 
 export const healthCheck = async (_req: Request, res: Response): Promise<void> => {
   try {

@@ -7,6 +7,7 @@ import cors from 'cors';
 import helmet from 'helmet';
 import morgan from 'morgan';
 import deliveryRoutes from './routes/deliveryRoutes';
+import routeRoutes from './routes/routeRoutes';
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -45,7 +46,10 @@ app.get('/', (req, res) => {
       health: '/health',
       delivery: '/api/delivery',
       deliveryHealth: '/api/delivery/health',
-      deliveryQuotes: '/api/delivery/quotes'
+
+      routes: '/api/routes',
+      driverRoutes: '/api/routes/driver',
+      shopRoutes: '/api/routes/shop'
     },
     cors: {
       enabled: true,
@@ -69,6 +73,7 @@ app.get('/health', (req, res) => {
 
 // API routes
 app.use('/api/delivery', deliveryRoutes);
+app.use('/api/routes', routeRoutes);
 
 // Error handling middleware
 app.use((err: Error, req: express.Request, res: express.Response, next: express.NextFunction) => {
@@ -89,6 +94,7 @@ app.listen(PORT, () => {
   console.log(`🚀 Server is running on port ${PORT}`);
   console.log(`📊 Health check: http://localhost:${PORT}/health`);
   console.log(`🚚 Delivery API: http://localhost:${PORT}/api/delivery`);
+  console.log(`🗺️ Route Storage API: http://localhost:${PORT}/api/routes`);
   console.log(`📋 API Documentation: http://localhost:${PORT}/`);
 });
 
