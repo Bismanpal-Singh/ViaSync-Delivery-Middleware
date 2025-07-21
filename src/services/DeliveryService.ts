@@ -43,6 +43,8 @@ export interface DeliveryRoute {
   departureTime: string;
   totalDistance: number;
   totalTime: number;
+  trafficAwareEta?: number;
+  trafficAwareSummary?: string;
 }
 
 export interface DeliveryResult {
@@ -186,7 +188,7 @@ export class DeliveryService {
   private async clusterDeliveriesForOptimization(
     depotAddress: string,
     deliveries: DeliveryLocation[],
-    maxBatchSize: number = 9 // 9 deliveries + 1 depot = 10 total (Google Maps API limit)
+    maxBatchSize: number = 24 // 24 deliveries + 1 depot = 25 total (Routes API limit)
   ): Promise<DeliveryLocation[][]> {
     console.log(`🗺️ Clustering ${deliveries.length} deliveries into optimal batches of ${maxBatchSize}`);
 
@@ -300,7 +302,7 @@ export class DeliveryService {
   private async getOptimalDeliveryClusters(
     depotAddress: string,
     deliveries: DeliveryLocation[],
-    maxBatchSize: number = 9 // 9 deliveries + 1 depot = 10 total (Google Maps API limit)
+    maxBatchSize: number = 24 // 24 deliveries + 1 depot = 25 total (Routes API limit)
   ): Promise<DeliveryLocation[][]> {
     console.log(`🗺️ Creating optimal delivery clusters for pagination (${deliveries.length} deliveries)`);
     
@@ -627,24 +629,19 @@ export class DeliveryService {
 
       // Step 6: Handle clustering internally based on delivery count
       let result: DeliveryResult;
-      
-      if (deliveryLocations.length > 9) {
+      if (deliveryLocations.length > 24) {
         console.log(`📊 Large delivery set detected (${deliveryLocations.length} deliveries). Using intelligent clustering...`);
-        
         // Get all optimal clusters
         const allClusters = await this.getOptimalDeliveryClusters(
           depotAddress,
           deliveryLocations,
-          9 // Max 9 deliveries per cluster (9 + 1 depot = 10 total - Google Maps limit)
+          24 // Max 24 deliveries per cluster (24 + 1 depot = 25 total)
         );
-        
         // Determine which cluster to optimize based on offset
-        const clusterIndex = Math.floor((params.offset || 0) / 9);
+        const clusterIndex = Math.floor((params.offset || 0) / 24);
         const targetCluster = allClusters[clusterIndex];
-        
         if (targetCluster) {
           console.log(`📦 Optimizing cluster ${clusterIndex + 1}/${allClusters.length} with ${targetCluster.length} deliveries`);
-          
           // Create optimization request for this specific cluster
           const clusterRequest: DeliveryRequest = {
             depotAddress: {
@@ -655,11 +652,9 @@ export class DeliveryService {
               }
             },
             deliveries: targetCluster,
-            numVehicles: params.numVehicles // Use the full number of vehicles for this cluster
+            numVehicles: params.numVehicles
           };
-          
           result = await this.optimizeDeliveryRoutes(clusterRequest, customStartTime);
-          
           // Add cluster information to the result
           result.warnings = result.warnings || [];
           result.warnings.push(`Cluster ${clusterIndex + 1} of ${allClusters.length} (${targetCluster.length} deliveries)`);
@@ -670,6 +665,32 @@ export class DeliveryService {
         // Use direct optimization for smaller delivery sets
         console.log(`📊 Small delivery set (${deliveryLocations.length} deliveries). Using direct optimization...`);
         result = await this.optimizeDeliveryRoutes(optimizationRequest, customStartTime);
+      }
+
+      // After optimization, get traffic-aware ETA for the optimized route
+      try {
+        const directionsApiKey = process.env.GOOGLE_MAPS_API_KEY;
+        if (directionsApiKey && result.routes && result.routes.length > 0) {
+          for (const route of result.routes) {
+            const orderedAddresses = route.stops.map(stop => stop.address);
+            if (orderedAddresses.length <= 25) {
+              const waypoints = orderedAddresses.slice(1, -1).map(addr => encodeURIComponent(addr)).join('|');
+              const url = `https://maps.googleapis.com/maps/api/directions/json?origin=${encodeURIComponent(orderedAddresses[0])}&destination=${encodeURIComponent(orderedAddresses[orderedAddresses.length-1])}&waypoints=${waypoints}&departure_time=now&key=${directionsApiKey}`;
+              const axios = require('axios');
+              const response = await axios.get(url);
+              if (response.data && response.data.routes && response.data.routes[0]) {
+                // Attach traffic-aware ETA to the route
+                route.trafficAwareEta = response.data.routes[0].legs.reduce((sum: number, leg: any) => sum + (leg.duration_in_traffic?.value || 0), 0);
+                route.trafficAwareSummary = response.data.routes[0].summary;
+              }
+            } else {
+              route.trafficAwareEta = undefined;
+              route.trafficAwareSummary = 'Too many stops for Directions API';
+            }
+          }
+        }
+      } catch (err) {
+        console.warn('⚠️ Failed to get traffic-aware ETA:', err);
       }
 
       // Automatically store the route with more specific details
