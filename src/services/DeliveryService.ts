@@ -113,6 +113,214 @@ export class DeliveryService {
     };
   }
 
+  /**
+   * Calculate rough distance between two coordinates using Haversine formula
+   */
+  private calculateRoughDistance(lat1: number, lon1: number, lat2: number, lon2: number): number {
+    const R = 6371000; // Earth's radius in meters
+    const dLat = this.toRadians(lat2 - lat1);
+    const dLon = this.toRadians(lon2 - lon1);
+
+    const a = Math.sin(dLat / 2) ** 2 +
+              Math.cos(this.toRadians(lat1)) *
+              Math.cos(this.toRadians(lat2)) *
+              Math.sin(dLon / 2) ** 2;
+
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    return R * c;
+  }
+
+  private toRadians(deg: number): number {
+    return deg * (Math.PI / 180);
+  }
+
+  /**
+   * Calculate time window compatibility score between a delivery and existing cluster
+   * Lower score = better compatibility
+   */
+  private calculateTimeCompatibilityScore(
+    cluster: DeliveryLocation[],
+    newDelivery: DeliveryLocation
+  ): number {
+    if (cluster.length === 0) return 0; // First delivery in cluster
+
+    // Convert time windows to minutes for easier comparison
+    const newStart = this.timeToMinutes(newDelivery.timeWindow.start);
+    const newEnd = this.timeToMinutes(newDelivery.timeWindow.end);
+
+    let totalCompatibilityScore = 0;
+    let validComparisons = 0;
+
+    for (const existingDelivery of cluster) {
+      const existingStart = this.timeToMinutes(existingDelivery.timeWindow.start);
+      const existingEnd = this.timeToMinutes(existingDelivery.timeWindow.end);
+
+      // Calculate overlap between time windows
+      const overlapStart = Math.max(newStart, existingStart);
+      const overlapEnd = Math.min(newEnd, existingEnd);
+      const overlap = Math.max(0, overlapEnd - overlapStart);
+
+      // Calculate center points of time windows
+      const newCenter = (newStart + newEnd) / 2;
+      const existingCenter = (existingStart + existingEnd) / 2;
+      const timeDistance = Math.abs(newCenter - existingCenter);
+
+      // Score based on overlap and time distance
+      // More overlap = better compatibility (lower score)
+      // Closer time centers = better compatibility (lower score)
+      const windowOverlapScore = Math.max(0, 60 - overlap); // 60 minutes = perfect overlap
+      const timeDistanceScore = Math.min(timeDistance, 240); // Cap at 4 hours
+      
+      const compatibilityScore = windowOverlapScore + timeDistanceScore;
+      totalCompatibilityScore += compatibilityScore;
+      validComparisons++;
+    }
+
+    return validComparisons > 0 ? totalCompatibilityScore / validComparisons : 0;
+  }
+
+  /**
+   * Cluster deliveries into optimal batches based on geographic proximity
+   * This ensures that geographically close deliveries are processed together
+   */
+  private async clusterDeliveriesForOptimization(
+    depotAddress: string,
+    deliveries: DeliveryLocation[],
+    maxBatchSize: number = 9 // 9 deliveries + 1 depot = 10 total (Google Maps API limit)
+  ): Promise<DeliveryLocation[][]> {
+    console.log(`🗺️ Clustering ${deliveries.length} deliveries into optimal batches of ${maxBatchSize}`);
+
+    // Step 1: Geocode all addresses (including depot) to get coordinates
+    const allAddresses = [depotAddress, ...deliveries.map(d => d.address)];
+    const geocodedAddresses = await Promise.all(
+      allAddresses.map(addr => this.geocodingService.geocodeAddress(addr))
+    );
+
+    // Check if all addresses were geocoded successfully
+    const failedGeocoding = geocodedAddresses.findIndex(coords => !coords);
+    if (failedGeocoding !== -1) {
+      throw new Error(`Failed to geocode address: ${allAddresses[failedGeocoding]}`);
+    }
+
+    const depotCoords = geocodedAddresses[0]!;
+    const deliveryCoords = geocodedAddresses.slice(1);
+
+    // Step 2: Calculate rough distances from depot to all deliveries
+    const distancesFromDepot = deliveryCoords.map((coords, index) => ({
+      delivery: deliveries[index],
+      coords: coords!,
+      distanceFromDepot: this.calculateRoughDistance(
+        depotCoords.lat, depotCoords.lon,
+        coords!.lat, coords!.lon
+      )
+    }));
+
+    // Step 3: Sort deliveries by distance from depot
+    distancesFromDepot.sort((a, b) => a.distanceFromDepot - b.distanceFromDepot);
+
+    // Step 4: Use K-means inspired clustering to group nearby deliveries
+    const clusters: DeliveryLocation[][] = [];
+    const usedDeliveries = new Set<string>();
+
+    while (usedDeliveries.size < deliveries.length) {
+      const currentCluster: DeliveryLocation[] = [];
+      
+      // Find the closest unused delivery to start this cluster
+      let seedDelivery = distancesFromDepot.find(d => !usedDeliveries.has(d.delivery.id));
+      if (!seedDelivery) break;
+
+      currentCluster.push(seedDelivery.delivery);
+      usedDeliveries.add(seedDelivery.delivery.id);
+
+      // Find other deliveries that are close to this cluster
+      const clusterCoords = [seedDelivery.coords];
+      
+      while (currentCluster.length < maxBatchSize && usedDeliveries.size < deliveries.length) {
+        let bestDelivery: typeof seedDelivery | null = null;
+        let bestScore = Infinity;
+
+        // Find the delivery that's closest to the current cluster
+        for (const deliveryData of distancesFromDepot) {
+          if (usedDeliveries.has(deliveryData.delivery.id)) continue;
+
+          // Calculate average distance to all deliveries in current cluster
+          const avgDistanceToCluster = clusterCoords.reduce((sum, coord) => {
+            return sum + this.calculateRoughDistance(
+              coord.lat, coord.lon,
+              deliveryData.coords.lat, deliveryData.coords.lon
+            );
+          }, 0) / clusterCoords.length;
+
+          // Enhanced scoring: Consider both geographic proximity AND time window compatibility
+          const geographicScore = avgDistanceToCluster * 0.5 + deliveryData.distanceFromDepot * 0.2;
+          
+          // Calculate time window compatibility score
+          const timeCompatibilityScore = this.calculateTimeCompatibilityScore(
+            currentCluster,
+            deliveryData.delivery
+          );
+          
+          // Combined score: 50% geographic + 30% time compatibility + 20% depot distance
+          const score = geographicScore + timeCompatibilityScore * 0.3;
+
+          if (score < bestScore) {
+            bestScore = score;
+            bestDelivery = deliveryData;
+          }
+        }
+
+        if (bestDelivery) {
+          currentCluster.push(bestDelivery.delivery);
+          clusterCoords.push(bestDelivery.coords);
+          usedDeliveries.add(bestDelivery.delivery.id);
+        } else {
+          break;
+        }
+      }
+
+      clusters.push(currentCluster);
+    }
+
+    console.log(`✅ Created ${clusters.length} optimized clusters:`);
+    clusters.forEach((cluster, index) => {
+      const totalDistance = cluster.reduce((sum, delivery) => {
+        const deliveryData = distancesFromDepot.find(d => d.delivery.id === delivery.id);
+        return sum + (deliveryData?.distanceFromDepot || 0);
+      }, 0);
+      console.log(`   Cluster ${index + 1}: ${cluster.length} deliveries, avg distance: ${(totalDistance / cluster.length / 1000).toFixed(1)}km`);
+    });
+
+    return clusters;
+  }
+
+  /**
+   * Get optimal delivery clusters for pagination
+   * This returns clusters that can be optimized one at a time
+   */
+  private async getOptimalDeliveryClusters(
+    depotAddress: string,
+    deliveries: DeliveryLocation[],
+    maxBatchSize: number = 9 // 9 deliveries + 1 depot = 10 total (Google Maps API limit)
+  ): Promise<DeliveryLocation[][]> {
+    console.log(`🗺️ Creating optimal delivery clusters for pagination (${deliveries.length} deliveries)`);
+    
+    // Use the same clustering logic but return all clusters
+    const clusters = await this.clusterDeliveriesForOptimization(
+      depotAddress,
+      deliveries,
+      maxBatchSize
+    );
+
+    console.log(`✅ Created ${clusters.length} optimal clusters for pagination`);
+    clusters.forEach((cluster, index) => {
+      console.log(`   Cluster ${index + 1}: ${cluster.length} deliveries`);
+    });
+
+    return clusters;
+  }
+
+
+
   async optimizeDeliveryRoutes(request: DeliveryRequest, customStartTime?: { date: string; time: string; minutesFromMidnight: number }): Promise<DeliveryResult> {
     try {
       console.log(`🚚 Optimizing delivery routes for ${request.deliveries.length} deliveries with ${request.numVehicles} vehicles`);
@@ -417,8 +625,52 @@ export class DeliveryService {
         numVehicles: params.numVehicles
       };
 
-      // Step 6: Call the existing optimization method with custom start time
-      const result = await this.optimizeDeliveryRoutes(optimizationRequest, customStartTime);
+      // Step 6: Handle clustering internally based on delivery count
+      let result: DeliveryResult;
+      
+      if (deliveryLocations.length > 9) {
+        console.log(`📊 Large delivery set detected (${deliveryLocations.length} deliveries). Using intelligent clustering...`);
+        
+        // Get all optimal clusters
+        const allClusters = await this.getOptimalDeliveryClusters(
+          depotAddress,
+          deliveryLocations,
+          9 // Max 9 deliveries per cluster (9 + 1 depot = 10 total - Google Maps limit)
+        );
+        
+        // Determine which cluster to optimize based on offset
+        const clusterIndex = Math.floor((params.offset || 0) / 9);
+        const targetCluster = allClusters[clusterIndex];
+        
+        if (targetCluster) {
+          console.log(`📦 Optimizing cluster ${clusterIndex + 1}/${allClusters.length} with ${targetCluster.length} deliveries`);
+          
+          // Create optimization request for this specific cluster
+          const clusterRequest: DeliveryRequest = {
+            depotAddress: {
+              address: depotAddress,
+              timeWindow: {
+                start: "07:00",
+                end: "23:59"
+              }
+            },
+            deliveries: targetCluster,
+            numVehicles: params.numVehicles // Use the full number of vehicles for this cluster
+          };
+          
+          result = await this.optimizeDeliveryRoutes(clusterRequest, customStartTime);
+          
+          // Add cluster information to the result
+          result.warnings = result.warnings || [];
+          result.warnings.push(`Cluster ${clusterIndex + 1} of ${allClusters.length} (${targetCluster.length} deliveries)`);
+        } else {
+          throw new Error(`No optimal cluster found for index ${clusterIndex}. Available clusters: 0-${allClusters.length - 1}`);
+        }
+      } else {
+        // Use direct optimization for smaller delivery sets
+        console.log(`📊 Small delivery set (${deliveryLocations.length} deliveries). Using direct optimization...`);
+        result = await this.optimizeDeliveryRoutes(optimizationRequest, customStartTime);
+      }
 
       // Automatically store the route with more specific details
       try {

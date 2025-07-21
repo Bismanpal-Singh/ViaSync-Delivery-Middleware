@@ -11,6 +11,8 @@ router.post('/optimize-from-database', DeliveryController.optimizeDeliveryFromDa
 
 
 
+
+
 // Health check
 router.get('/health', DeliveryController.healthCheck);
 

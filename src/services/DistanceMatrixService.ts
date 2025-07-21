@@ -18,7 +18,7 @@ interface DistanceMatrixResult {
 
 export class DistanceMatrixService {
   private readonly apiKey: string;
-  private readonly baseUrl = 'https://maps.googleapis.com/maps/api/distancematrix/json';
+  private readonly baseUrl = 'https://routes.googleapis.com/distanceMatrix/v2:computeRouteMatrix';
 
   constructor() {
     const key = process.env.GOOGLE_MAPS_API_KEY;
@@ -30,44 +30,51 @@ export class DistanceMatrixService {
 
   public async getDistanceMatrix(locations: Location[]): Promise<DistanceMatrixResult | null> {
     try {
-      const coordinates = locations.map(loc => `${loc.lat},${loc.lon}`);
-      const joinedCoords = coordinates.join('|');
-
-      const response = await axios.get(this.baseUrl, {
-        params: {
-          origins: joinedCoords,
-          destinations: joinedCoords,
-          departure_time: 'now',
-          traffic_model: 'best_guess',
-          key: this.apiKey
-        }
-      });
-
-      if (response.data.status !== 'OK') {
-        console.error('Google API returned error:', response.data.status);
-        return null;
+      if (locations.length > 25) {
+        throw new Error('Compute Route Matrix API supports up to 25 locations per request (non-traffic-aware).');
       }
+      const origins = locations.map(loc => ({
+        waypoint: { location: { latLng: { latitude: loc.lat, longitude: loc.lon } } }
+      }));
+      const destinations = origins; // Full matrix
+      const coordinates = locations.map(loc => `${loc.lat},${loc.lon}`);
 
-      const matrix: number[][] = [];
-      const distances: number[][] = [];
+      const body = {
+        origins,
+        destinations,
+        travelMode: 'DRIVE'
+      };
 
-      response.data.rows.forEach((row: any, i: number) => {
-        matrix[i] = [];
-        distances[i] = [];
-
-        row.elements.forEach((element: any, j: number) => {
-          if (element.status === 'OK') {
-            // Use duration_in_traffic for real-time traffic data, fallback to duration if not available
-            const travelTime = element.duration_in_traffic?.value || element.duration.value;
-            matrix[i][j] = travelTime;    // in seconds
-            distances[i][j] = element.distance.value; // in meters
-          } else {
-            const fallback = this.estimateFallbackDistance(locations[i], locations[j]);
-            matrix[i][j] = fallback / 10;   // crude estimate: 10 m/s ~ 36 km/h
-            distances[i][j] = fallback;
+      const response = await axios.post(
+        this.baseUrl,
+        body,
+        {
+          headers: {
+            'X-Goog-Api-Key': this.apiKey,
+            'X-Goog-FieldMask': 'originIndex,destinationIndex,duration,distanceMeters,status,condition',
+            'Content-Type': 'application/json'
           }
-        });
-      });
+        }
+      );
+
+      // Log the full raw response for debugging
+      console.log('Compute Route Matrix API raw response:', JSON.stringify(response.data, null, 2));
+
+      // Reconstruct the NxN matrix from the flat response
+      const N = locations.length;
+      const matrix: number[][] = Array(N).fill(null).map(() => Array(N).fill(null));
+      const distances: number[][] = Array(N).fill(null).map(() => Array(N).fill(null));
+
+      for (const element of response.data) {
+        const i = element.originIndex;
+        const j = element.destinationIndex;
+        let durationSeconds = 999999;
+        if (typeof element.duration === 'string' && element.duration.endsWith('s')) {
+          durationSeconds = parseInt(element.duration.replace('s', ''), 10);
+        }
+        matrix[i][j] = durationSeconds;
+        distances[i][j] = typeof element.distanceMeters === 'number' ? element.distanceMeters : 999999;
+      }
 
       return {
         origins: coordinates,
@@ -75,32 +82,9 @@ export class DistanceMatrixService {
         matrix,
         distances
       };
-
     } catch (error) {
-      console.error('Distance Matrix API error:', error);
+      console.error('Compute Route Matrix API error:', error);
       return null;
     }
-  }
-
-  private estimateFallbackDistance(a: Location, b: Location): number {
-    return this.haversine(a.lat, a.lon, b.lat, b.lon);
-  }
-
-  private haversine(lat1: number, lon1: number, lat2: number, lon2: number): number {
-    const R = 6371000; // meters
-    const dLat = this.toRadians(lat2 - lat1);
-    const dLon = this.toRadians(lon2 - lon1);
-
-    const a = Math.sin(dLat / 2) ** 2 +
-              Math.cos(this.toRadians(lat1)) *
-              Math.cos(this.toRadians(lat2)) *
-              Math.sin(dLon / 2) ** 2;
-
-    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-    return R * c;
-  }
-
-  private toRadians(deg: number): number {
-    return deg * (Math.PI / 180);
   }
 }
