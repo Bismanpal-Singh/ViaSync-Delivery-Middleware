@@ -97,7 +97,12 @@ export class SupabaseService {
 
       // Apply status filter if provided
       if (params.status) {
-        query = query.eq('status', params.status);
+        if (params.status.includes(',')) {
+          const statuses = params.status.split(',').map(s => s.trim());
+          query = query.in('status', statuses);
+        } else {
+          query = query.eq('status', params.status);
+        }
       }
 
       // Apply pagination

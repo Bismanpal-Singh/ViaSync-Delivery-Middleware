@@ -8,12 +8,14 @@ import { v4 as uuidv4 } from 'uuid';
 
 
 export interface DeliveryLocation {
-  id: string;
+  id: string; // This will be a comma-separated list of delivery IDs if merged
   address: string;
   timeWindow: {
     start: string; // HH:MM format
     end: string;   // HH:MM format
   };
+  deliveryIds?: string[]; // List of merged delivery IDs
+  coords?: { lat: number; lon: number }; // Geocoded coordinates for merged deliveries
 }
 
 export interface DeliveryRequest {
@@ -321,7 +323,50 @@ export class DeliveryService {
     return clusters;
   }
 
-
+  /**
+   * Merge deliveries at the same address (lat/lon) into a single stop
+   */
+  private mergeDuplicateDeliveries(deliveries: DeliveryLocation[], geocodedAddresses: {lat: number, lon: number}[]): DeliveryLocation[] {
+    const merged: {[key: string]: DeliveryLocation} = {};
+    const coordToIds: {[key: string]: string[]} = {};
+    const coordToWindows: {[key: string]: {start: string[], end: string[]}} = {};
+    deliveries.forEach((delivery, idx) => {
+      const coords = geocodedAddresses[idx];
+      // Use rounded lat/lon as key (to avoid floating point issues)
+      const key = `${coords.lat.toFixed(6)},${coords.lon.toFixed(6)}`;
+      if (!merged[key]) {
+        merged[key] = {
+          id: delivery.id,
+          address: delivery.address,
+          timeWindow: { start: delivery.timeWindow.start, end: delivery.timeWindow.end },
+          deliveryIds: [delivery.id],
+          coords // attach coords for later use
+        };
+        coordToIds[key] = [delivery.id];
+        coordToWindows[key] = { start: [delivery.timeWindow.start], end: [delivery.timeWindow.end] };
+      } else {
+        merged[key].deliveryIds!.push(delivery.id);
+        coordToIds[key].push(delivery.id);
+        coordToWindows[key].start.push(delivery.timeWindow.start);
+        coordToWindows[key].end.push(delivery.timeWindow.end);
+      }
+    });
+    // Combine time windows for merged stops
+    Object.keys(merged).forEach(key => {
+      const starts = coordToWindows[key].start.map(t => parseInt(t.replace(':', ''), 10));
+      const ends = coordToWindows[key].end.map(t => parseInt(t.replace(':', ''), 10));
+      // Earliest start, latest end
+      const minStart = Math.min(...starts);
+      const maxEnd = Math.max(...ends);
+      // Convert back to HH:MM
+      const pad = (n: number) => n.toString().padStart(4, '0');
+      merged[key].timeWindow.start = pad(minStart).slice(0,2) + ':' + pad(minStart).slice(2);
+      merged[key].timeWindow.end = pad(maxEnd).slice(0,2) + ':' + pad(maxEnd).slice(2);
+      // Use comma-separated IDs for merged node
+      merged[key].id = merged[key].deliveryIds!.join(',');
+    });
+    return Object.values(merged);
+  }
 
   async optimizeDeliveryRoutes(request: DeliveryRequest, customStartTime?: { date: string; time: string; minutesFromMidnight: number }): Promise<DeliveryResult> {
     try {
@@ -367,39 +412,41 @@ export class DeliveryService {
         throw new Error(`Failed to geocode address: ${allAddresses[failedGeocoding]}`);
       }
 
+      // Merge duplicate deliveries (excluding depot)
+      const validGeocoded = geocodedAddresses.slice(1).filter((g): g is any => !!g && typeof g.lat === 'number' && typeof g.lon === 'number');
+      const validDeliveries = request.deliveries.filter((_, idx) => {
+        const g = geocodedAddresses[idx + 1];
+        return !!g && typeof g.lat === 'number' && typeof g.lon === 'number';
+      });
+      const mergedDeliveries = this.mergeDuplicateDeliveries(validDeliveries, validGeocoded);
+      // Build merged geocoded list to match mergedDeliveries order
+      const mergedGeocoded: {lat: number, lon: number}[] = mergedDeliveries.map(md => md.coords).filter((c): c is {lat: number, lon: number} => !!c);
       // Step 2: Get distance and time matrices
-      const locationObjects = geocodedAddresses.map((coords, index) => ({
+      const locationObjects = [geocodedAddresses[0], ...mergedGeocoded].map((coords, index) => ({
         lat: coords!.lat,
         lon: coords!.lon,
         type: index === 0 ? 'depot' as const : 'order' as const,
         orderId: index === 0 ? undefined : index
       }));
-      
       const matrixResult = await this.distanceMatrixService.getDistanceMatrix(locationObjects);
       if (!matrixResult) {
         throw new Error('Failed to get distance and time matrices');
       }
-      
       // Keep distances in meters and times in seconds for OR-Tools consistency
       const distanceMatrix = matrixResult.distances; // Already in meters
       const timeMatrix = matrixResult.matrix; // Already in seconds
-
       // Debug: Print sample of distance and time matrices
       console.log('🧮 Distance matrix (meters):', JSON.stringify(distanceMatrix, null, 2));
       console.log('⏱️ Time matrix (seconds):', JSON.stringify(timeMatrix, null, 2));
-
       // Step 3: Convert time windows to seconds from midnight
       const timeWindows: [number, number][] = [[depotTimeWindow[0] * 60, depotTimeWindow[1] * 60]]; // Convert minutes to seconds
-
-      for (const delivery of request.deliveries) {
+      for (const delivery of mergedDeliveries) {
         const startMinutes = this.timeToMinutes(delivery.timeWindow.start);
         const endMinutes = this.timeToMinutes(delivery.timeWindow.end);
         timeWindows.push([startMinutes * 60, endMinutes * 60]); // Convert minutes to seconds
       }
-
       // Debug: Print time windows
       console.log('🕰️ Time windows (seconds from midnight):', JSON.stringify(timeWindows));
-
       // Step 4: Prepare data for OR-Tools solver
       const solverData: VRPTWData = {
         num_vehicles: request.numVehicles,
@@ -408,25 +455,19 @@ export class DeliveryService {
         time_matrix: timeMatrix,
         time_windows: timeWindows
       };
-
       console.log('🧪 Debug Preview:');
       console.log('   ➤ Sample travel time (0→1):', timeMatrix[0][1]);
       console.log('   ➤ Sample time window:', timeWindows[1]);
-
       // Debug: Log the data being sent to solver
       console.log('🔍 Solver data:', JSON.stringify(solverData, null, 2));
-
       // Step 5: Solve with OR-Tools
       const solverResult = await this.orToolsService.solveVRPTW(solverData);
-
       if (solverResult.error) {
         throw new Error(`Solver failed: ${solverResult.error}`);
       }
-
       if (!solverResult.routes || solverResult.routes.length === 0) {
         throw new Error('No feasible routes found');
       }
-
       // Step 6: Convert solver result to delivery routes
       const routes: DeliveryRoute[] = solverResult.routes.map(solverRoute => {
         const stops = solverRoute.route.map((nodeIndex, stopIndex) => {
@@ -437,7 +478,6 @@ export class DeliveryService {
               address: typeof request.depotAddress === 'string' 
               ? request.depotAddress 
               : request.depotAddress.address,
-
               eta: stopIndex === 0 ? this.calculateDepartureTime(solverRoute, timeMatrix) : 
                    this.minutesToTime(this.calculateArrivalTime(solverRoute, stopIndex, timeMatrix)),
               timeWindow: {
@@ -446,18 +486,18 @@ export class DeliveryService {
               }              
             };
           } else {
-            // Delivery location
-            const delivery = request.deliveries[nodeIndex - 1];
+            // Delivery location (merged)
+            const delivery = mergedDeliveries[nodeIndex - 1];
             const arrivalTime = this.calculateArrivalTime(solverRoute, stopIndex, timeMatrix);
             return {
               locationId: delivery.id,
               address: delivery.address,
               eta: this.minutesToTime(arrivalTime),
-              timeWindow: delivery.timeWindow
+              timeWindow: delivery.timeWindow,
+              deliveryIds: delivery.deliveryIds // include all merged delivery IDs
             };
           }
         });
-
         return {
           vehicleId: solverRoute.vehicle_id + 1,
           stops,
