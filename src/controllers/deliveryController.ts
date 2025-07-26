@@ -55,8 +55,12 @@ export const optimizeDelivery = async (req: Request, res: Response): Promise<voi
   }
 };
 
+/**
+ * Optimize delivery routes from database using the same filtering logic as GET /api/delivery/pending
+ * This ensures that the optimization uses the exact same deliveries that the user sees on the frontend
+ */
 export const optimizeDeliveryFromDatabase = async (req: Request, res: Response): Promise<void> => {
-  const { fromDate, toDate, status, numVehicles, depotAddress, limit, offset, startDate, startTime } = req.body;
+  const { fromDate, toDate, status, numVehicles, depotAddress, limit, offset, startDate, startTime, date } = req.body;
 
   if (!numVehicles || numVehicles <= 0) {
     res.status(400).json({
@@ -84,15 +88,28 @@ export const optimizeDeliveryFromDatabase = async (req: Request, res: Response):
     return;
   }
 
+  // Handle date parameter (for consistency with GET /api/delivery/pending)
+  let finalFromDate = fromDate;
+  let finalToDate = toDate;
+  
+  if (date && typeof date === 'string') {
+    // If date is provided, use it for both fromDate and toDate (same day)
+    finalFromDate = date;
+    finalToDate = date;
+    console.log(`📅 Using single date parameter: ${date}`);
+  }
+
   try {
     console.log(`🚚 Optimizing routes from database with ${numVehicles} vehicles`);
+    console.log(`📅 Date range: ${finalFromDate} to ${finalToDate}`);
+    console.log(`📋 Using same filtering as GET /api/delivery/pending (status: Booked,Pending)`);
     if (startDate || startTime) {
       console.log(`⏰ Using custom start time: ${startDate || 'today'} at ${startTime || 'now'}`);
     }
 
     const result = await deliveryService.optimizeDeliveryRoutesFromDatabase({
-      fromDate,
-      toDate,
+      fromDate: finalFromDate,
+      toDate: finalToDate,
       status,
       numVehicles,
       depotAddress,

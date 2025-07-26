@@ -81,6 +81,20 @@ export class DeliveryService {
     this.routeStorageService = new RouteStorageService();
   }
 
+  /**
+   * Common method to fetch deliveries using the same filtering logic
+   * as the GET /api/delivery/pending endpoint
+   * This ensures consistency between what the user sees and what gets optimized
+   */
+  private async getPendingDeliveriesForDate(date: string, limit: number = 200): Promise<any[]> {
+    return await this.supabaseService.getDeliveries({
+      fromDate: date,
+      toDate: date,
+      status: 'Booked,Pending', // Same as pending endpoint
+      limit: limit
+    });
+  }
+
   private timeToMinutes(timeStr: string): number {
     const [hours, minutes] = timeStr.split(':').map(Number);
     return hours * 60 + minutes;
@@ -602,14 +616,24 @@ export class DeliveryService {
     try {
       console.log(`🚚 Optimizing delivery routes from database with ${params.numVehicles} vehicles`);
 
-      // Step 1: Get real deliveries from Supabase
-      const deliveries = await this.supabaseService.getDeliveries({
-        fromDate: params.fromDate,
-        toDate: params.toDate,
-        status: params.status,
-        limit: params.limit || 100, // Use provided limit or default to 100
-        offset: params.offset || 0  // Use provided offset or default to 0
-      });
+      // Step 1: Get real deliveries from Supabase using the same filtering logic as GET /api/delivery/pending
+      // If a specific date is provided, use the same logic as the pending endpoint
+      let deliveries: any[];
+      if (params.fromDate && params.toDate && params.fromDate === params.toDate) {
+        // Single date - use the same logic as pending endpoint
+        console.log(`📅 Using single date filtering (same as GET /api/delivery/pending): ${params.fromDate}`);
+        deliveries = await this.getPendingDeliveriesForDate(params.fromDate, params.limit || 200);
+      } else {
+        // Date range or other criteria - use the original logic but with consistent status
+        console.log(`📅 Using date range filtering: ${params.fromDate} to ${params.toDate}`);
+        deliveries = await this.supabaseService.getDeliveries({
+          fromDate: params.fromDate,
+          toDate: params.toDate,
+          status: 'Booked,Pending', // Use same status as pending endpoint
+          limit: params.limit || 200, // Use same default limit as pending endpoint
+          offset: params.offset || 0
+        });
+      }
 
       if (deliveries.length === 0) {
         throw new Error('No deliveries found for the specified criteria');
