@@ -57,7 +57,7 @@ export const getRouteForShopOwner = async (req: Request, res: Response): Promise
   }
 
   try {
-    console.log(`📊 Getting route for shop owner: ${routeId}`);
+          console.log(`Getting route: ${routeId}`);
 
     const route = await routeStorageService.getRouteForShopOwner(routeId);
 

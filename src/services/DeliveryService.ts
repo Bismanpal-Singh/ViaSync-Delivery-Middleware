@@ -27,8 +27,7 @@ export interface DeliveryRequest {
     };
   };
   deliveries: DeliveryLocation[];
-  numVehicles: number;
-  vehicleCapacities?: number[];
+  vehicleCapacities: number[]; // Required - number of vehicles derived from array length
 }
 
 
@@ -210,7 +209,7 @@ export class DeliveryService {
     deliveries: DeliveryLocation[],
     maxBatchSize: number = 24 // 24 deliveries + 1 depot = 25 total (Routes API limit)
   ): Promise<DeliveryLocation[][]> {
-    console.log(`🗺️ Clustering ${deliveries.length} deliveries into optimal batches of ${maxBatchSize}`);
+          console.log(`Clustering ${deliveries.length} deliveries into batches of ${maxBatchSize}`);
 
     // Step 1: Geocode all addresses (including depot) to get coordinates
     const allAddresses = [depotAddress, ...deliveries.map(d => d.address)];
@@ -303,13 +302,13 @@ export class DeliveryService {
       clusters.push(currentCluster);
     }
 
-    console.log(`✅ Created ${clusters.length} optimized clusters:`);
+          console.log(`Created ${clusters.length} clusters`);
     clusters.forEach((cluster, index) => {
       const totalDistance = cluster.reduce((sum, delivery) => {
         const deliveryData = distancesFromDepot.find(d => d.delivery.id === delivery.id);
         return sum + (deliveryData?.distanceFromDepot || 0);
       }, 0);
-      console.log(`   Cluster ${index + 1}: ${cluster.length} deliveries, avg distance: ${(totalDistance / cluster.length / 1000).toFixed(1)}km`);
+      console.log(`   Cluster ${index + 1}: ${cluster.length} deliveries`);
     });
 
     return clusters;
@@ -388,7 +387,7 @@ export class DeliveryService {
 
   async optimizeDeliveryRoutes(request: DeliveryRequest, customStartTime?: { date: string; time: string; minutesFromMidnight: number }): Promise<DeliveryResult> {
     try {
-      console.log(`🚚 Optimizing delivery routes for ${request.deliveries.length} deliveries with ${request.numVehicles} vehicles`);
+      console.log(`Optimizing ${request.deliveries.length} deliveries with ${request.vehicleCapacities.length} vehicles`);
 
       // Step 1: Geocode all addresses
       let depotAddressStr: string;
@@ -454,8 +453,8 @@ export class DeliveryService {
       const distanceMatrix = matrixResult.distances; // Already in meters
       const timeMatrix = matrixResult.matrix; // Already in seconds
       // Debug: Print sample of distance and time matrices
-      console.log('🧮 Distance matrix (meters):', JSON.stringify(distanceMatrix, null, 2));
-      console.log('⏱️ Time matrix (seconds):', JSON.stringify(timeMatrix, null, 2));
+      // Distance matrix is internal data - no need to log
+      // Time matrix and windows are internal data - no need to log
       // Step 3: Convert time windows to seconds from midnight
       const timeWindows: [number, number][] = [[depotTimeWindow[0] * 60, depotTimeWindow[1] * 60]]; // Convert minutes to seconds
       for (const delivery of mergedDeliveries) {
@@ -464,28 +463,21 @@ export class DeliveryService {
         timeWindows.push([startMinutes * 60, endMinutes * 60]); // Convert minutes to seconds
       }
       // Debug: Print time windows
-      console.log('🕰️ Time windows (seconds from midnight):', JSON.stringify(timeWindows));
+      // Time windows are internal data - no need to log
       // Step 4: Prepare data for OR-Tools solver
       // Each delivery has a demand of 1, depot has demand of 0
       const demands = [0, ...Array(mergedDeliveries.length).fill(1)];
       const solverData: VRPTWData = {
-        num_vehicles: request.numVehicles,
+        num_vehicles: request.vehicleCapacities.length,
         depot: 0,
         distance_matrix: distanceMatrix,
         time_matrix: timeMatrix,
         time_windows: timeWindows,
-        vehicle_capacities: request.vehicleCapacities || Array(request.numVehicles).fill(1000), // Default capacity if not provided
+        vehicle_capacities: request.vehicleCapacities,
         demands: demands
       };
-      console.log('🧪 Debug Preview:');
-      console.log('   ➤ Sample travel time (0→1):', timeMatrix[0][1]);
-      console.log('   ➤ Sample time window:', timeWindows[1]);
-      console.log('   ➤ Vehicle capacities:', solverData.vehicle_capacities);
-      console.log('   ➤ Demands:', solverData.demands);
-      console.log('   ➤ Total demand:', solverData.demands?.reduce((a, b) => a + b, 0) || 0);
-      console.log('   ➤ Total capacity:', solverData.vehicle_capacities?.reduce((a, b) => a + b, 0) || 0);
-      // Debug: Log the data being sent to solver
-      console.log('🔍 Solver data:', JSON.stringify(solverData, null, 2));
+      // Log essential information only
+      console.log(`Optimizing ${mergedDeliveries.length} deliveries with ${request.vehicleCapacities.length} vehicles`);
       // Step 5: Solve with OR-Tools
       const solverResult = await this.orToolsService.solveVRPTW(solverData);
       if (solverResult.error) {
@@ -557,16 +549,16 @@ export class DeliveryService {
           routeName,
           deliveryDate,
           depotAddress,
-          numVehicles: request.numVehicles,
+          numVehicles: request.vehicleCapacities.length,
           numVehiclesUsed: result.numVehiclesUsed,
           totalDistance: result.totalDistance,
           totalTime: result.totalTime,
           routes: result.routes
         });
 
-        console.log(`💾 Route stored with ID: ${routeId}`);
+        console.log(`Route stored: ${routeId}`);
       } catch (storageError) {
-        console.warn('⚠️ Failed to store route:', storageError);
+        console.warn('Failed to store route:', storageError);
         // Don't fail the optimization if storage fails
       }
 
@@ -621,7 +613,6 @@ export class DeliveryService {
     fromDate?: string;
     toDate?: string;
     status?: string;
-    numVehicles: number;
     vehicleCapacities?: number[];
     depotAddress?: string;
     limit?: number;
@@ -630,7 +621,7 @@ export class DeliveryService {
     startTime?: string;
   }): Promise<DeliveryResult> {
     try {
-      console.log(`🚚 Optimizing delivery routes from database with ${params.numVehicles} vehicles`);
+      console.log(`Optimizing routes from database with ${(params.vehicleCapacities || [50]).length} vehicles`);
 
       // Step 1: Get real deliveries from Supabase using the same filtering logic as GET /api/delivery/pending
       // If a specific date is provided, use the same logic as the pending endpoint
@@ -655,7 +646,7 @@ export class DeliveryService {
         throw new Error('No deliveries found for the specified criteria');
       }
 
-      console.log(`📦 Found ${deliveries.length} deliveries to optimize`);
+      console.log(`Found ${deliveries.length} deliveries to optimize`);
 
       // Step 2: Get depot address (shop location)
       const shopLocation = await this.supabaseService.getShopLocation();
@@ -704,14 +695,13 @@ export class DeliveryService {
           }
         },
         deliveries: deliveryLocations,
-        numVehicles: params.numVehicles,
-        vehicleCapacities: params.vehicleCapacities
+        vehicleCapacities: params.vehicleCapacities || [50]
       };
 
       // Step 6: Handle clustering internally based on delivery count
       let result: DeliveryResult;
       if (deliveryLocations.length > 24) {
-        console.log(`📊 Large delivery set detected (${deliveryLocations.length} deliveries). Using intelligent clustering...`);
+        console.log(`Large delivery set (${deliveryLocations.length} deliveries). Using clustering...`);
         // Get all optimal clusters
         const allClusters = await this.getOptimalDeliveryClusters(
           depotAddress,
@@ -722,7 +712,7 @@ export class DeliveryService {
         const clusterIndex = Math.floor((params.offset || 0) / 24);
         const targetCluster = allClusters[clusterIndex];
         if (targetCluster) {
-          console.log(`📦 Optimizing cluster ${clusterIndex + 1}/${allClusters.length} with ${targetCluster.length} deliveries`);
+          console.log(`Optimizing cluster ${clusterIndex + 1}/${allClusters.length} (${targetCluster.length} deliveries)`);
           // Create optimization request for this specific cluster
           const clusterRequest: DeliveryRequest = {
             depotAddress: {
@@ -733,8 +723,7 @@ export class DeliveryService {
               }
             },
             deliveries: targetCluster,
-            numVehicles: params.numVehicles,
-            vehicleCapacities: params.vehicleCapacities
+            vehicleCapacities: params.vehicleCapacities || [50]
           };
           result = await this.optimizeDeliveryRoutes(clusterRequest, customStartTime);
           // Add cluster information to the result
@@ -745,7 +734,7 @@ export class DeliveryService {
         }
       } else {
         // Use direct optimization for smaller delivery sets
-        console.log(`📊 Small delivery set (${deliveryLocations.length} deliveries). Using direct optimization...`);
+        console.log(`Small delivery set (${deliveryLocations.length} deliveries). Using direct optimization...`);
         result = await this.optimizeDeliveryRoutes(optimizationRequest, customStartTime);
       }
 
@@ -792,7 +781,7 @@ export class DeliveryService {
           routeName: finalRouteName,
           deliveryDate,
           depotAddress,
-          numVehicles: params.numVehicles,
+          numVehicles: (params.vehicleCapacities || [50]).length,
           numVehiclesUsed: result.numVehiclesUsed,
           totalDistance: result.totalDistance,
           totalTime: result.totalTime,

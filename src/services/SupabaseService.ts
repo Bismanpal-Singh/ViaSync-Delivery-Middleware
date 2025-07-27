@@ -80,7 +80,7 @@ export class SupabaseService {
     offset?: number;
   }): Promise<Delivery[]> {
     try {
-      console.log('📦 Fetching deliveries from Supabase...');
+      console.log('Fetching deliveries from Supabase...');
       
       let query = this.supabase
         .from('deliveries')
@@ -182,7 +182,7 @@ export class SupabaseService {
 
   async getDeliveryById(deliveryId: number): Promise<Delivery | null> {
     try {
-      console.log(`📦 Fetching delivery ${deliveryId} from Supabase...`);
+      console.log(`Fetching delivery ${deliveryId} from Supabase...`);
       
       const { data, error } = await this.supabase
         .from('deliveries')
@@ -209,7 +209,7 @@ export class SupabaseService {
 
   async getDeliveriesByCustomer(customerName: string): Promise<Delivery[]> {
     try {
-      console.log(`📦 Fetching deliveries for customer ${customerName}...`);
+      console.log(`Fetching deliveries for customer ${customerName}...`);
       
       const { data, error } = await this.supabase
         .from('deliveries')
@@ -232,7 +232,7 @@ export class SupabaseService {
 
   async getRecentDeliveries(limit: number = 10): Promise<Delivery[]> {
     try {
-      console.log(`📦 Fetching ${limit} recent deliveries...`);
+      console.log(`Fetching ${limit} recent deliveries...`);
       
       const { data, error } = await this.supabase
         .from('deliveries')

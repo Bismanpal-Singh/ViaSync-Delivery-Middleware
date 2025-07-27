@@ -12,31 +12,31 @@ const supabaseService = new SupabaseService({
 const geocodingService = new GeocodingService();
 
 export const optimizeDelivery = async (req: Request, res: Response): Promise<void> => {
-  const { depotAddress, deliveries, numVehicles } = req.body;
+  const { depotAddress, deliveries, vehicleCapacities } = req.body;
 
-  if (!depotAddress || !deliveries || !numVehicles) {
+  if (!depotAddress || !deliveries || !vehicleCapacities) {
     res.status(400).json({
       success: false,
-      error: 'Missing required fields: depotAddress, deliveries, or numVehicles'
+      error: 'Missing required fields: depotAddress, deliveries, or vehicleCapacities'
     });
     return;
   }
 
-  if (deliveries.length === 0 || numVehicles <= 0) {
+  if (deliveries.length === 0 || !Array.isArray(vehicleCapacities) || vehicleCapacities.length === 0) {
     res.status(400).json({
       success: false,
-      error: 'At least one delivery and a positive number of vehicles are required'
+      error: 'At least one delivery and a non-empty vehicleCapacities array are required'
     });
     return;
   }
 
   try {
-    console.log(`🚚 Optimizing ${deliveries.length} deliveries with ${numVehicles} vehicles`);
+    console.log(`Optimizing ${deliveries.length} deliveries with ${vehicleCapacities.length} vehicles`);
 
     const result = await deliveryService.optimizeDeliveryRoutes({
       depotAddress,
       deliveries,
-      numVehicles
+      vehicleCapacities
     });
 
     res.json({
@@ -80,7 +80,7 @@ export const optimizeDeliveryFromDatabase = async (req: Request, res: Response):
     return;
   }
 
-  const numVehicles = vehicleCapacities.length;
+  // numVehicles is derived from vehicleCapacities.length
 
   // Validate startTime format if provided
   if (startTime && !/^([01]?[0-9]|2[0-3]):[0-5][0-9]$/.test(startTime)) {
@@ -112,19 +112,18 @@ export const optimizeDeliveryFromDatabase = async (req: Request, res: Response):
   }
 
   try {
-    console.log(`🚚 Optimizing routes from database with ${numVehicles} vehicles`);
-    console.log(`📦 Vehicle capacities: [${vehicleCapacities.join(', ')}]`);
-    console.log(`📅 Date range: ${finalFromDate} to ${finalToDate}`);
-    console.log(`📋 Using same filtering as GET /api/delivery/pending (status: Booked,Pending)`);
+    console.log(`Optimizing routes from database with ${vehicleCapacities.length} vehicles`);
+    console.log(`Vehicle capacities: [${vehicleCapacities.join(', ')}]`);
+    console.log(`Date range: ${finalFromDate} to ${finalToDate}`);
+    console.log(`Using same filtering as GET /api/delivery/pending (status: Booked,Pending)`);
     if (startDate || startTime) {
-      console.log(`⏰ Using custom start time: ${startDate || 'today'} at ${startTime || 'now'}`);
+      console.log(`Using custom start time: ${startDate || 'today'} at ${startTime || 'now'}`);
     }
 
     const result = await deliveryService.optimizeDeliveryRoutesFromDatabase({
       fromDate: finalFromDate,
       toDate: finalToDate,
       status,
-      numVehicles,
       vehicleCapacities,
       depotAddress,
       limit,

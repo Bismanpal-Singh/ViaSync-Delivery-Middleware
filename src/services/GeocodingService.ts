@@ -29,7 +29,7 @@ export class GeocodingService {
       // Check cache first
       const cached = await this.cacheService.getCachedGeocoding(address);
       if (cached) {
-        console.log(`🗺️ Cache hit for: ${address}`);
+        console.log(`Cache hit for: ${address}`);
         return {
           lat: cached.lat,
           lon: cached.lon,
@@ -38,7 +38,7 @@ export class GeocodingService {
       }
 
       // If not in cache, call Google API
-      console.log(`🗺️ Geocoding: ${address}`);
+      console.log(`Geocoding: ${address}`);
       const response = await axios.get(this.baseUrl, {
         params: {
           address,
