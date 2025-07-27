@@ -36,11 +36,14 @@ export interface DeliveryRoute {
   stops: Array<{
     locationId: string;
     address: string;
-    eta: string;
+    eta?: string; // Keep for backward compatibility
+    arrivalTime?: string;
+    departureTime?: string;
     timeWindow: {
       start: string;
       end: string;
     };
+    deliveryIds?: string[];
   }>;
   departureTime: string;
   totalDistance: number;
@@ -490,14 +493,23 @@ export class DeliveryService {
       const routes: DeliveryRoute[] = solverResult.routes.map(solverRoute => {
         const stops = solverRoute.route.map((nodeIndex, stopIndex) => {
           if (nodeIndex === 0) {
-            // Depot
+            // Depot - no service time added by solver
+            const departureTime = stopIndex === 0 ? 
+              this.calculateDepartureTime(solverRoute, timeMatrix, customStartTime) :
+              this.minutesToTime(this.calculateArrivalTime(solverRoute, stopIndex, timeMatrix)); // No service time at depot
+            
+            // For depot, arrival and departure should be the same (no service time)
+            const arrivalTime = customStartTime ? 
+              this.timeToMinutes(customStartTime.time) : 
+              this.calculateArrivalTime(solverRoute, stopIndex, timeMatrix);
+            
             return {
               locationId: 'depot',
               address: typeof request.depotAddress === 'string' 
               ? request.depotAddress 
               : request.depotAddress.address,
-              eta: stopIndex === 0 ? this.calculateDepartureTime(solverRoute, timeMatrix) : 
-                   this.minutesToTime(this.calculateArrivalTime(solverRoute, stopIndex, timeMatrix)),
+              arrivalTime: this.minutesToTime(arrivalTime),
+              departureTime: departureTime,
               timeWindow: {
                 start: this.minutesToTime(depotTimeWindow[0]),
                 end: this.minutesToTime(depotTimeWindow[1])
@@ -506,11 +518,16 @@ export class DeliveryService {
           } else {
             // Delivery location (merged)
             const delivery = mergedDeliveries[nodeIndex - 1];
-            const arrivalTime = this.calculateArrivalTime(solverRoute, stopIndex, timeMatrix);
+            // The solver's arrival time includes service time from previous stops
+            // We need to calculate the actual arrival time (without service time at this stop)
+            const solverArrivalTime = this.calculateArrivalTime(solverRoute, stopIndex, timeMatrix);
+            const actualArrivalTime = solverArrivalTime - 10; // Subtract service time to get actual arrival
+            const departureTime = actualArrivalTime + 10; // Add service time for departure
             return {
               locationId: delivery.id,
               address: delivery.address,
-              eta: this.minutesToTime(arrivalTime),
+              arrivalTime: this.minutesToTime(actualArrivalTime),
+              departureTime: this.minutesToTime(departureTime),
               timeWindow: delivery.timeWindow,
               deliveryIds: delivery.deliveryIds // include all merged delivery IDs
             };
@@ -572,6 +589,7 @@ export class DeliveryService {
 
   private calculateArrivalTime(route: any, stopIndex: number, timeMatrix: number[][]): number {
     // Get the actual arrival time from the solver (in seconds)
+    // This is the cumulative time when the vehicle arrives at this stop
     const arrivalTimeSeconds = route.arrival_times?.[stopIndex] || 0;
     
     // Convert to minutes for display
@@ -593,14 +611,12 @@ export class DeliveryService {
     // Get the first delivery node
     const firstDeliveryNode = route.route[firstDeliveryIndex];
     
-    // Calculate travel time from depot to first delivery (including service time)
-    const travelTimeToFirstDelivery = timeMatrix[0][firstDeliveryNode] + 600; // Add 10 min service time
-    
-    // Get the arrival time at first delivery
+    // Get the arrival time at first delivery (includes travel time + service time)
     const arrivalTimeAtFirstDelivery = route.arrival_times?.[firstDeliveryIndex] || 0;
     
-    // Calculate departure time: arrival time - travel time
-    const departureTimeSeconds = arrivalTimeAtFirstDelivery - travelTimeToFirstDelivery;
+    // Calculate departure time: arrival time - travel time - service time
+    const travelTimeOnly = timeMatrix[0][firstDeliveryNode]; // Just travel time, no service time
+    const departureTimeSeconds = arrivalTimeAtFirstDelivery - travelTimeOnly - 600; // Subtract travel time and service time
     const departureTimeMinutes = Math.round(departureTimeSeconds / 60);
 
     return this.minutesToTime(departureTimeMinutes);
