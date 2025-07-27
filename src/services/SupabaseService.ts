@@ -101,7 +101,7 @@ export class SupabaseService {
           const statuses = params.status.split(',').map(s => s.trim());
           query = query.in('status', statuses);
         } else {
-          query = query.eq('status', params.status);
+        query = query.eq('status', params.status);
         }
       }
 

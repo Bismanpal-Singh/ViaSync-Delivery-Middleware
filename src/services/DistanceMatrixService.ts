@@ -53,7 +53,7 @@ export class DistanceMatrixService {
             'X-Goog-Api-Key': this.apiKey,
             'X-Goog-FieldMask': 'originIndex,destinationIndex,duration,distanceMeters,status,condition',
             'Content-Type': 'application/json'
-          }
+        }
         }
       );
 
@@ -74,7 +74,7 @@ export class DistanceMatrixService {
         }
         matrix[i][j] = durationSeconds;
         distances[i][j] = typeof element.distanceMeters === 'number' ? element.distanceMeters : 999999;
-      }
+          }
 
       return {
         origins: coordinates,
