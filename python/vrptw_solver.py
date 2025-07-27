@@ -6,18 +6,24 @@ from ortools.constraint_solver import routing_enums_pb2, pywrapcp
 
 
 def create_data_model(input_data):
+    """Create the data model for the VRPTW with capacity constraints."""
     return {
         "distance_matrix": input_data["distance_matrix"],
         "time_matrix": input_data["time_matrix"],
         "time_windows": input_data["time_windows"],
         "num_vehicles": input_data["num_vehicles"],
-        "depot": input_data["depot"]
+        "depot": input_data["depot"],
+        "vehicle_capacities": input_data.get("vehicle_capacities", [1000] * input_data["num_vehicles"]),
+        "demands": input_data.get("demands", [1] * len(input_data["distance_matrix"]))
     }
 
 
 def solve_vrptw(data):
     print(f"🔍 Solver input: {len(data['distance_matrix'])} locations, {data['num_vehicles']} vehicles", file=sys.stderr)
-    print(f"🕰️ Time windows: {data['time_windows']}", file=sys.stderr)
+    print(f"📦 Vehicle capacities: {data['vehicle_capacities']}", file=sys.stderr)
+    print(f"📋 Demands: {data['demands']}", file=sys.stderr)
+    print(f"📊 Total demand: {sum(data['demands'])}", file=sys.stderr)
+    print(f"🚚 Total capacity: {sum(data['vehicle_capacities'])}", file=sys.stderr)
     
     manager = pywrapcp.RoutingIndexManager(
         len(data["distance_matrix"]),
@@ -35,55 +41,22 @@ def solve_vrptw(data):
     distance_cb_idx = routing.RegisterTransitCallback(distance_callback)
     routing.SetArcCostEvaluatorOfAllVehicles(distance_cb_idx)
 
-    # Time callback with service time included
-    def time_callback(from_idx, to_idx):
-        f, t = manager.IndexToNode(from_idx), manager.IndexToNode(to_idx)
-        travel_time = data["time_matrix"][f][t]
-        
-        # Add 10 minutes (600 seconds) service time at delivery locations
-        if t != data["depot"]:
-            travel_time += 600
-        
-        return travel_time
+    # Add capacity dimension using the official CVRP approach
+    def demand_callback(from_idx):
+        """Returns the demand of the node."""
+        from_node = manager.IndexToNode(from_idx)
+        return data["demands"][from_node]
 
-    time_cb_idx = routing.RegisterTransitCallback(time_callback)
-
-    # Add time dimension with more lenient constraints
-    routing.AddDimension(
-        time_cb_idx,
-        slack_max=1800,       # 30 minutes waiting time
-        capacity=86400,       # 24 hours max time per vehicle (more lenient)
-        fix_start_cumul_to_zero=False,
-        name="Time"
+    demand_cb_idx = routing.RegisterUnaryTransitCallback(demand_callback)
+    
+    # Use AddDimensionWithVehicleCapacity exactly like the official example
+    routing.AddDimensionWithVehicleCapacity(
+        demand_cb_idx,
+        0,  # null capacity slack
+        data["vehicle_capacities"],  # vehicle maximum capacities
+        True,  # start cumul to zero
+        "Capacity"
     )
-
-    time_dim = routing.GetDimensionOrDie("Time")
-
-    # Apply time window constraints for non-depot locations
-    for location_idx, (start, end) in enumerate(data["time_windows"]):
-        if location_idx == data["depot"]:
-            continue
-        index = manager.NodeToIndex(location_idx)
-        time_dim.CumulVar(index).SetRange(start, end)
-
-    # Apply depot time window to all vehicle start nodes
-    depot_start, depot_end = data["time_windows"][data["depot"]]
-    for vehicle_id in range(data["num_vehicles"]):
-        index = routing.Start(vehicle_id)
-        time_dim.CumulVar(index).SetRange(depot_start, depot_end)
-
-    # Allow dropping nodes (disjunctions) to handle infeasible time windows
-    penalty = 1000000  # High penalty for dropping nodes
-    for location_idx in range(len(data["distance_matrix"])):
-        if location_idx == data["depot"]:
-            continue
-        index = manager.NodeToIndex(location_idx)
-        routing.AddDisjunction([index], penalty)
-
-    # Minimize start and end times for each vehicle (forces earliest feasible start)
-    for vehicle_id in range(data["num_vehicles"]):
-        routing.AddVariableMinimizedByFinalizer(time_dim.CumulVar(routing.Start(vehicle_id)))
-        routing.AddVariableMinimizedByFinalizer(time_dim.CumulVar(routing.End(vehicle_id)))
 
     # Solver params
     search_params = pywrapcp.DefaultRoutingSearchParameters()
@@ -93,7 +66,7 @@ def solve_vrptw(data):
         routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH)
     search_params.time_limit.seconds = 15
 
-    print("🔧 Solving with disjunctions enabled...", file=sys.stderr)
+    print("🔧 Solving with capacity constraints using AddDimensionWithVehicleCapacity...", file=sys.stderr)
     solution = routing.SolveWithParameters(search_params)
 
     if not solution:
@@ -103,7 +76,7 @@ def solve_vrptw(data):
     # Extract results
     routes = []
     total_distance = 0
-    total_time = 0
+    total_load = 0
 
     for v in range(data["num_vehicles"]):
         if not routing.IsVehicleUsed(solution, v):
@@ -111,49 +84,54 @@ def solve_vrptw(data):
             
         index = routing.Start(v)
         route = []
-        arrival_times = []
+        loads = []
 
         while not routing.IsEnd(index):
             node = manager.IndexToNode(index)
-            time = solution.Value(time_dim.CumulVar(index))
+            load = solution.Value(routing.GetDimensionOrDie("Capacity").CumulVar(index))
             route.append(node)
-            arrival_times.append(time)
+            loads.append(load)
             index = solution.Value(routing.NextVar(index))
 
         node = manager.IndexToNode(index)
-        time = solution.Value(time_dim.CumulVar(index))
+        load = solution.Value(routing.GetDimensionOrDie("Capacity").CumulVar(index))
         route.append(node)
-        arrival_times.append(time)
+        loads.append(load)
 
         print(f"Vehicle {v} route: {route}", file=sys.stderr)
+        print(f"Vehicle {v} loads: {loads}", file=sys.stderr)
         
         if len(route) > 2:  # At least depot -> depot
             route_distance = sum(
                 data["distance_matrix"][route[i]][route[i + 1]]
                 for i in range(len(route) - 1)
             )
-            route_time = arrival_times[-1] - arrival_times[0]
+            route_load = loads[-1]  # Final load (total load carried)
 
             routes.append({
                 "vehicle_id": v,
                 "route": route,
-                "arrival_times": arrival_times,
+                "loads": loads,
                 "distance": route_distance,
-                "time": route_time
+                "time": 0,  # No time calculation for now
+                "load": route_load,
+                "capacity": data["vehicle_capacities"][v]
             })
 
             total_distance += route_distance
-            total_time += route_time
+            total_load += route_load
 
     if not routes:
         print("❌ No routes found after solving", file=sys.stderr)
         return {"error": "No routes found after solving"}
 
     print(f"✅ Found {len(routes)} routes", file=sys.stderr)
+    print(f"📊 Total load: {total_load}", file=sys.stderr)
     return {
         "routes": routes,
         "total_distance": total_distance,
-        "total_time": total_time,
+        "total_time": 0,  # No time calculation for now
+        "total_load": total_load,
         "num_vehicles_used": len(routes)
     }
 

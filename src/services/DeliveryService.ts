@@ -48,12 +48,15 @@ export interface DeliveryRoute {
   totalTime: number;
   trafficAwareEta?: number;
   trafficAwareSummary?: string;
+  load?: number;
+  capacity?: number;
 }
 
 export interface DeliveryResult {
   routes: DeliveryRoute[];
   totalDistance: number;
   totalTime: number;
+  totalLoad?: number;
   numVehiclesUsed: number;
   warnings?: string[];
 }
@@ -463,16 +466,24 @@ export class DeliveryService {
       // Debug: Print time windows
       console.log('🕰️ Time windows (seconds from midnight):', JSON.stringify(timeWindows));
       // Step 4: Prepare data for OR-Tools solver
+      // Each delivery has a demand of 1, depot has demand of 0
+      const demands = [0, ...Array(mergedDeliveries.length).fill(1)];
       const solverData: VRPTWData = {
         num_vehicles: request.numVehicles,
         depot: 0,
         distance_matrix: distanceMatrix,
         time_matrix: timeMatrix,
-        time_windows: timeWindows
+        time_windows: timeWindows,
+        vehicle_capacities: request.vehicleCapacities || Array(request.numVehicles).fill(1000), // Default capacity if not provided
+        demands: demands
       };
       console.log('🧪 Debug Preview:');
       console.log('   ➤ Sample travel time (0→1):', timeMatrix[0][1]);
       console.log('   ➤ Sample time window:', timeWindows[1]);
+      console.log('   ➤ Vehicle capacities:', solverData.vehicle_capacities);
+      console.log('   ➤ Demands:', solverData.demands);
+      console.log('   ➤ Total demand:', solverData.demands?.reduce((a, b) => a + b, 0) || 0);
+      console.log('   ➤ Total capacity:', solverData.vehicle_capacities?.reduce((a, b) => a + b, 0) || 0);
       // Debug: Log the data being sent to solver
       console.log('🔍 Solver data:', JSON.stringify(solverData, null, 2));
       // Step 5: Solve with OR-Tools
@@ -518,7 +529,9 @@ export class DeliveryService {
           stops,
           departureTime: this.calculateDepartureTime(solverRoute, timeMatrix, customStartTime),
           totalDistance: Math.round(solverRoute.distance), // Distance in meters
-          totalTime: Math.round(solverRoute.time / 60) // Convert seconds to minutes
+          totalTime: Math.round(solverRoute.time / 60), // Convert seconds to minutes
+          load: solverRoute.load,
+          capacity: solverRoute.capacity
         };
       });
 
@@ -526,6 +539,7 @@ export class DeliveryService {
         routes,
         totalDistance: Math.round(solverResult.total_distance || 0), // Distance in meters
         totalTime: Math.round((solverResult.total_time || 0) / 60), // Convert seconds to minutes
+        totalLoad: solverResult.total_load,
         numVehiclesUsed: solverResult.num_vehicles_used || routes.length
       };
 
@@ -719,7 +733,8 @@ export class DeliveryService {
               }
             },
             deliveries: targetCluster,
-            numVehicles: params.numVehicles
+            numVehicles: params.numVehicles,
+            vehicleCapacities: params.vehicleCapacities
           };
           result = await this.optimizeDeliveryRoutes(clusterRequest, customStartTime);
           // Add cluster information to the result

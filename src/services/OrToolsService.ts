@@ -8,6 +8,7 @@ export interface VRPTWData {
   time_matrix: number[][];
   time_windows: [number, number][];
   demands?: number[];
+  vehicle_capacities?: number[];
 }
 
 export interface VRPTWResult {
@@ -15,12 +16,16 @@ export interface VRPTWResult {
     vehicle_id: number;
     route: number[];
     arrival_times?: number[];
+    loads?: number[];
     distance: number;
     time: number;
+    load: number;
+    capacity: number;
     deliveries: number[];
   }>;
   total_distance?: number;
   total_time?: number;
+  total_load?: number;
   num_vehicles_used?: number;
   error?: string;
 }
