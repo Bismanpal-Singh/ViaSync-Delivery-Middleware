@@ -28,6 +28,7 @@ export interface DeliveryRequest {
   };
   deliveries: DeliveryLocation[];
   numVehicles: number;
+  vehicleCapacities?: number[];
 }
 
 
@@ -607,6 +608,7 @@ export class DeliveryService {
     toDate?: string;
     status?: string;
     numVehicles: number;
+    vehicleCapacities?: number[];
     depotAddress?: string;
     limit?: number;
     offset?: number;
@@ -688,7 +690,8 @@ export class DeliveryService {
           }
         },
         deliveries: deliveryLocations,
-        numVehicles: params.numVehicles
+        numVehicles: params.numVehicles,
+        vehicleCapacities: params.vehicleCapacities
       };
 
       // Step 6: Handle clustering internally based on delivery count

@@ -60,15 +60,27 @@ export const optimizeDelivery = async (req: Request, res: Response): Promise<voi
  * This ensures that the optimization uses the exact same deliveries that the user sees on the frontend
  */
 export const optimizeDeliveryFromDatabase = async (req: Request, res: Response): Promise<void> => {
-  const { fromDate, toDate, status, numVehicles, depotAddress, limit, offset, startDate, startTime, date } = req.body;
+  const { fromDate, toDate, status, vehicleCapacities, depotAddress, limit, offset, startDate, startTime, date } = req.body;
 
-  if (!numVehicles || numVehicles <= 0) {
+  // Validate vehicleCapacities array
+  if (!vehicleCapacities || !Array.isArray(vehicleCapacities) || vehicleCapacities.length === 0) {
     res.status(400).json({
       success: false,
-      error: 'numVehicles is required and must be positive'
+      error: 'vehicleCapacities array is required and must not be empty'
     });
     return;
   }
+
+  // Validate each capacity is positive
+  if (vehicleCapacities.some(capacity => !Number.isInteger(capacity) || capacity <= 0)) {
+    res.status(400).json({
+      success: false,
+      error: 'All vehicle capacities must be positive integers'
+    });
+    return;
+  }
+
+  const numVehicles = vehicleCapacities.length;
 
   // Validate startTime format if provided
   if (startTime && !/^([01]?[0-9]|2[0-3]):[0-5][0-9]$/.test(startTime)) {
@@ -101,6 +113,7 @@ export const optimizeDeliveryFromDatabase = async (req: Request, res: Response):
 
   try {
     console.log(`🚚 Optimizing routes from database with ${numVehicles} vehicles`);
+    console.log(`📦 Vehicle capacities: [${vehicleCapacities.join(', ')}]`);
     console.log(`📅 Date range: ${finalFromDate} to ${finalToDate}`);
     console.log(`📋 Using same filtering as GET /api/delivery/pending (status: Booked,Pending)`);
     if (startDate || startTime) {
@@ -112,6 +125,7 @@ export const optimizeDeliveryFromDatabase = async (req: Request, res: Response):
       toDate: finalToDate,
       status,
       numVehicles,
+      vehicleCapacities,
       depotAddress,
       limit,
       offset,
