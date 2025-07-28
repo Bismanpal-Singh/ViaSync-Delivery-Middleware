@@ -494,27 +494,61 @@ export class DeliveryService {
         const stops = solverRoute.route.map((nodeIndex, stopIndex) => {
           if (nodeIndex === 0) {
             // Depot - no service time added by solver
-            const departureTime = stopIndex === 0 ? 
-              this.calculateDepartureTime(solverRoute, timeMatrix, customStartTime) :
-              this.minutesToTime(this.calculateArrivalTime(solverRoute, stopIndex, timeMatrix)); // No service time at depot
+            const isFirstStop = stopIndex === 0;
+            const isLastStop = stopIndex === solverRoute.route.length - 1;
             
-            // For depot, arrival and departure should be the same (no service time)
-            const arrivalTime = customStartTime ? 
-              this.timeToMinutes(customStartTime.time) : 
-              this.calculateArrivalTime(solverRoute, stopIndex, timeMatrix);
-            
-            return {
-              locationId: 'depot',
-              address: typeof request.depotAddress === 'string' 
-              ? request.depotAddress 
-              : request.depotAddress.address,
-              arrivalTime: this.minutesToTime(arrivalTime),
-              departureTime: departureTime,
-              timeWindow: {
-                start: this.minutesToTime(depotTimeWindow[0]),
-                end: this.minutesToTime(depotTimeWindow[1])
-              }              
-            };
+            if (isFirstStop) {
+              // First stop (departure from depot)
+              const departureTime = this.calculateDepartureTime(solverRoute, timeMatrix, customStartTime);
+              const arrivalTime = customStartTime ? 
+                this.timeToMinutes(customStartTime.time) : 
+                this.calculateArrivalTime(solverRoute, stopIndex, timeMatrix);
+              
+              return {
+                locationId: 'depot',
+                address: typeof request.depotAddress === 'string' 
+                ? request.depotAddress 
+                : request.depotAddress.address,
+                arrivalTime: this.minutesToTime(arrivalTime),
+                departureTime: departureTime,
+                timeWindow: {
+                  start: this.minutesToTime(depotTimeWindow[0]),
+                  end: this.minutesToTime(depotTimeWindow[1])
+                }              
+              };
+            } else if (isLastStop) {
+              // Last stop (return to depot)
+              const arrivalTime = this.calculateArrivalTime(solverRoute, stopIndex, timeMatrix);
+              
+              return {
+                locationId: 'depot',
+                address: typeof request.depotAddress === 'string' 
+                ? request.depotAddress 
+                : request.depotAddress.address,
+                arrivalTime: this.minutesToTime(arrivalTime),
+                departureTime: this.minutesToTime(arrivalTime), // Same as arrival (end of route)
+                timeWindow: {
+                  start: this.minutesToTime(depotTimeWindow[0]),
+                  end: this.minutesToTime(depotTimeWindow[1])
+                }              
+              };
+            } else {
+              // Middle depot stop (shouldn't happen in normal routes)
+              const arrivalTime = this.calculateArrivalTime(solverRoute, stopIndex, timeMatrix);
+              
+              return {
+                locationId: 'depot',
+                address: typeof request.depotAddress === 'string' 
+                ? request.depotAddress 
+                : request.depotAddress.address,
+                arrivalTime: this.minutesToTime(arrivalTime),
+                departureTime: this.minutesToTime(arrivalTime),
+                timeWindow: {
+                  start: this.minutesToTime(depotTimeWindow[0]),
+                  end: this.minutesToTime(depotTimeWindow[1])
+                }              
+              };
+            }
           } else {
             // Delivery location (merged)
             const delivery = mergedDeliveries[nodeIndex - 1];
