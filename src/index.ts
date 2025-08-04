@@ -8,9 +8,15 @@ import helmet from 'helmet';
 import morgan from 'morgan';
 import deliveryRoutes from './routes/deliveryRoutes';
 import routeRoutes from './routes/routeRoutes';
+import authRoutes from './routes/authRoutes';
+import { authenticateUser, optionalAuth } from './middleware/authMiddleware';
+import { AuthService } from './services/AuthService';
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+
+// Initialize AuthService for middleware
+const authService = new AuthService();
 
 // CORS configuration for Vite frontend
 const corsOptions = {
@@ -25,7 +31,7 @@ const corsOptions = {
   ],
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'x-session-token'],
 };
 
 // Middleware
@@ -71,9 +77,12 @@ app.get('/health', (req, res) => {
   });
 });
 
-// API routes
-app.use('/api/delivery', deliveryRoutes);
-app.use('/api/routes', routeRoutes);
+// Authentication routes (no auth required)
+app.use('/api/auth', authRoutes);
+
+// API routes with authentication
+app.use('/api/delivery', optionalAuth(authService), deliveryRoutes);
+app.use('/api/routes', optionalAuth(authService), routeRoutes);
 
 // Error handling middleware
 app.use((err: Error, req: express.Request, res: express.Response, next: express.NextFunction) => {
@@ -93,6 +102,7 @@ app.use('*', (req, res) => {
 app.listen(PORT, () => {
   console.log(`🚀 Server is running on port ${PORT}`);
   console.log(`📊 Health check: http://localhost:${PORT}/health`);
+  console.log(`🔐 Authentication API: http://localhost:${PORT}/api/auth`);
   console.log(`🚚 Delivery API: http://localhost:${PORT}/api/delivery`);
   console.log(`🗺️ Route Storage API: http://localhost:${PORT}/api/routes`);
   console.log(`📋 API Documentation: http://localhost:${PORT}/`);

@@ -3,8 +3,11 @@ import { DeliveryService } from '../services/DeliveryService';
 import { SupabaseService } from '../services/SupabaseService';
 import { config } from '../config/environment';
 import { GeocodingService } from '../services/GeocodingService';
+import { AuthService } from '../services/AuthService';
 
-const deliveryService = new DeliveryService();
+// Initialize services
+const authService = new AuthService();
+const deliveryService = new DeliveryService(authService);
 const supabaseService = new SupabaseService({
   url: config.supabase.url,
   key: config.supabase.anonKey
@@ -120,6 +123,14 @@ export const optimizeDeliveryFromDatabase = async (req: Request, res: Response):
       console.log(`Using custom start time: ${startDate || 'today'} at ${startTime || 'now'}`);
     }
 
+    // Get user context from request (set by auth middleware)
+    const userContext = req.user;
+    if (userContext) {
+      console.log(`👤 User context: ${userContext.userId} (${userContext.companyId})`);
+    } else {
+      console.log('⚠️ No user context - using fallback authentication');
+    }
+
     const result = await deliveryService.optimizeDeliveryRoutesFromDatabase({
       fromDate: finalFromDate,
       toDate: finalToDate,
@@ -129,7 +140,8 @@ export const optimizeDeliveryFromDatabase = async (req: Request, res: Response):
       limit,
       offset,
       startDate,
-      startTime
+      startTime,
+      userContext
     });
 
     res.json({
@@ -316,18 +328,26 @@ export const getPendingDeliveriesByDate = async (req: Request, res: Response): P
     res.status(400).json({ success: false, error: 'Missing or invalid date parameter' });
     return;
   }
+
+  // Get user context from request (set by auth middleware)
+  const userContext = req.user;
+
   try {
-    // Fetch all pending deliveries for the date (status: Booked or Pending)
-    const deliveries = await supabaseService.getDeliveries({
-      fromDate: date,
-      toDate: date,
-      status: 'Booked,Pending', // Pass as comma-separated for .in query in service
-      limit: 200 // or whatever is reasonable
-    });
-    console.log(`🔎 Fetched ${deliveries.length} deliveries from Supabase for date ${date}`);
+    console.log(`🔍 Fetching pending deliveries for date: ${date}`);
+    if (userContext) {
+      console.log(`👤 User context: ${userContext.userId} (${userContext.companyId})`);
+    } else {
+      console.log('⚠️ No user context - using fallback authentication');
+    }
+
+    // Use DeliveryService to get deliveries with user context
+    const deliveries = await deliveryService.getPendingDeliveriesForDate(date, 200, userContext);
+    
+    console.log(`🔎 Fetched ${deliveries.length} deliveries for date ${date}`);
     if (deliveries.length > 0) {
       console.log('🔎 First 3 deliveries:', deliveries.slice(0, 3));
     }
+
     // For each delivery, get lat/lon from cache or geocode
     const results = await Promise.all(deliveries.map(async (d: any) => {
       const address = `${d.address_1}, ${d.city}, ${d.zip}`;
@@ -341,11 +361,17 @@ export const getPendingDeliveriesByDate = async (req: Request, res: Response): P
         longitude: coords.lon
       };
     }));
+
     // Only return deliveries with valid coordinates
     const filtered = results.filter((r) => !!r);
     res.json(filtered);
   } catch (err) {
-    res.status(500).json({ success: false, error: 'Failed to fetch pending deliveries', details: err instanceof Error ? err.message : String(err) });
+    console.error('❌ Failed to fetch pending deliveries:', err);
+    res.status(500).json({ 
+      success: false, 
+      error: 'Failed to fetch pending deliveries', 
+      details: err instanceof Error ? err.message : String(err) 
+    });
   }
 };
 

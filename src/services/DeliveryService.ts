@@ -3,7 +3,9 @@ import { DistanceMatrixService } from './DistanceMatrixService';
 import { GeocodingService } from './GeocodingService';
 import { OrToolsService, VRPTWData, VRPTWResult } from './OrToolsService';
 import { RouteStorageService } from './RouteStorageService';
+import { QuickFloraTokenManager } from './QuickFloraTokenManager';
 import { v4 as uuidv4 } from 'uuid';
+import axios from 'axios';
 
 
 
@@ -73,8 +75,10 @@ export class DeliveryService {
   private geocodingService: GeocodingService;
   private orToolsService: OrToolsService;
   private routeStorageService: RouteStorageService;
+  private quickFloraTokenManager: QuickFloraTokenManager;
+  private authService?: any; // Will be injected for user context
 
-  constructor() {
+  constructor(authService?: any) {
     // Initialize with environment variables
     const config = {
       url: process.env.SUPABASE_URL!,
@@ -85,6 +89,89 @@ export class DeliveryService {
     this.geocodingService = new GeocodingService();
     this.orToolsService = new OrToolsService();
     this.routeStorageService = new RouteStorageService();
+    this.quickFloraTokenManager = new QuickFloraTokenManager();
+    this.authService = authService;
+  }
+
+  /**
+   * Syncs delivery data from QuickFlora API to Supabase database.
+   * This ensures we always have the latest data before performing operations.
+   */
+  private async syncDeliveriesFromQuickFlora(params: {
+    fromDate?: string;
+    toDate?: string;
+    status?: string;
+    limit?: number;
+    offset?: number;
+    userContext?: {
+      sessionId: string;
+      userId: string;
+      companyId: string;
+      employeeId: string;
+    };
+  }): Promise<void> {
+    try {
+      console.log('🔄 Starting QuickFlora API sync...');
+      
+      let token: string;
+      let companyId: string;
+      
+      // Use user context if available, otherwise fall back to environment variables
+      if (params.userContext && this.authService) {
+        console.log(`🔐 Using authenticated user context: ${params.userContext.userId} (${params.userContext.companyId})`);
+        token = await this.authService.getValidBearerToken(params.userContext.sessionId);
+        companyId = params.userContext.companyId;
+      } else {
+        console.log('⚠️ Using fallback token manager (no user context)');
+        token = await this.quickFloraTokenManager.getValidToken();
+        companyId = process.env.QUICKFLORA_COMPANY_ID || "GTSFlowersInc28110";
+      }
+      
+      // Prepare the request payload for QuickFlora API
+      // Use full day range to get ALL deliveries for the date
+      const requestPayload = {
+        companyID: companyId,
+        divisionID: "DEFAULT",
+        departmentID: "DEFAULT",
+        fromDate: params.fromDate ? new Date(params.fromDate + 'T00:00:00.000Z').toISOString() : new Date().toISOString(),
+        toDate: params.toDate ? new Date(params.toDate + 'T23:59:59.999Z').toISOString() : new Date().toISOString(),
+        locationID: "DEFAULT",
+        wholesaleLocationID: true,
+        zoneID: "",
+        sortExpression: "",
+        sortDirection: "",
+        displayfilter: 1,
+        priorirty: ""
+      };
+
+      // Call the QuickFlora API
+      const response = await axios.post(
+        'https://quickflora-new.com/QuickFloraCoreAPI/DeliveryManager/getOrderDetails',
+        requestPayload,
+        {
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json',
+            'accept': '*/*'
+          }
+        }
+      );
+
+      if (response.data && response.data.data) {
+        console.log(`📡 Fetched ${response.data.data.length} deliveries from QuickFlora API.`);
+        
+        // Sync the data to Supabase
+        const syncResult = await this.supabaseService.syncWithQuickFlora(response.data.data);
+        console.log(`✅ Sync completed: ${syncResult.added} added, ${syncResult.updated} updated, ${syncResult.failed} failed.`);
+      } else {
+        console.log('📭 No deliveries found from QuickFlora API.');
+      }
+
+    } catch (error) {
+      console.error('❌ Failed to sync from QuickFlora API:', error);
+      // Don't throw error, proceed with data already in Supabase
+      // This ensures the application continues to work even if QuickFlora API is down
+    }
   }
 
   /**
@@ -92,11 +179,26 @@ export class DeliveryService {
    * as the GET /api/delivery/pending endpoint
    * This ensures consistency between what the user sees and what gets optimized
    */
-  private async getPendingDeliveriesForDate(date: string, limit: number = 200): Promise<any[]> {
+  public async getPendingDeliveriesForDate(date: string, limit: number = 200, userContext?: {
+    sessionId: string;
+    userId: string;
+    companyId: string;
+    employeeId: string;
+  }): Promise<any[]> {
+    // First, sync the latest data from QuickFlora
+    await this.syncDeliveriesFromQuickFlora({
+      fromDate: date,
+      toDate: date,
+      status: 'Booked,Invoiced', // Updated to use the confirmed statuses
+      limit: limit,
+      userContext: userContext
+    });
+
+    // Then fetch from Supabase (now with fresh data)
     return await this.supabaseService.getDeliveries({
       fromDate: date,
       toDate: date,
-      status: 'Booked,Pending', // Same as pending endpoint
+      status: 'Booked,Invoiced', // Updated to use the confirmed statuses
       limit: limit
     });
   }
@@ -669,6 +771,12 @@ export class DeliveryService {
     offset?: number;
     startDate?: string;
     startTime?: string;
+    userContext?: {
+      sessionId: string;
+      userId: string;
+      companyId: string;
+      employeeId: string;
+    };
   }): Promise<DeliveryResult> {
     try {
       console.log(`Optimizing routes from database with ${(params.vehicleCapacities || [50]).length} vehicles`);
@@ -679,14 +787,27 @@ export class DeliveryService {
       if (params.fromDate && params.toDate && params.fromDate === params.toDate) {
         // Single date - use the same logic as pending endpoint
         console.log(`📅 Using single date filtering (same as GET /api/delivery/pending): ${params.fromDate}`);
-        deliveries = await this.getPendingDeliveriesForDate(params.fromDate, params.limit || 200);
+        deliveries = await this.getPendingDeliveriesForDate(params.fromDate, params.limit || 200, params.userContext);
       } else {
         // Date range or other criteria - use the original logic but with consistent status
         console.log(`📅 Using date range filtering: ${params.fromDate} to ${params.toDate}`);
+        
+        // Sync with user context if available
+        if (params.userContext) {
+          await this.syncDeliveriesFromQuickFlora({
+            fromDate: params.fromDate,
+            toDate: params.toDate,
+            status: 'Booked,Invoiced',
+            limit: params.limit || 200,
+            userContext: params.userContext
+          });
+        }
+        
+        // Fetch from Supabase
         deliveries = await this.supabaseService.getDeliveries({
           fromDate: params.fromDate,
           toDate: params.toDate,
-          status: 'Booked,Pending', // Use same status as pending endpoint
+          status: 'Booked,Invoiced', // Updated to use the confirmed statuses
           limit: params.limit || 200, // Use same default limit as pending endpoint
           offset: params.offset || 0
         });
