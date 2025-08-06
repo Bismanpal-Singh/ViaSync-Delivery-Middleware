@@ -105,7 +105,7 @@ export class DeliveryService {
    * Syncs delivery data from QuickFlora API to Supabase database.
    * This ensures we always have the latest data before performing operations.
    */
-  private async syncDeliveriesFromQuickFlora(params: {
+  public async syncDeliveriesFromQuickFlora(params: {
     fromDate?: string;
     toDate?: string;
     status?: string;
@@ -117,7 +117,8 @@ export class DeliveryService {
       companyId: string;
       employeeId: string;
     };
-  }): Promise<void> {
+    returnData?: boolean; // New parameter to return data directly
+  }): Promise<void | any[]> {
     try {
       console.log('🔄 Starting QuickFlora API sync...');
       
@@ -174,19 +175,33 @@ export class DeliveryService {
       if (response.data && response.data.data) {
         console.log(`📡 Fetched ${response.data.data.length} deliveries from QuickFlora API.`);
         
-        // Sync the data to Supabase with company ID
+        // If returnData is requested, return the data directly (skip Supabase sync)
+        if (params.returnData) {
+          return response.data.data;
+        }
+        
+        // Otherwise, sync the data to Supabase with company ID (original behavior)
         const syncResult = await this.supabaseService.syncWithQuickFlora(response.data.data, companyId);
         console.log(`✅ Sync completed: ${syncResult.added} added, ${syncResult.updated} updated, ${syncResult.failed} failed.`);
       } else {
         console.log('📭 No deliveries found from QuickFlora API.');
+        return params.returnData ? [] : undefined;
       }
 
     } catch (error) {
       console.error('❌ Failed to sync from QuickFlora API:', error);
-      // Don't throw error, proceed with data already in Supabase
+      
+      // If returnData is requested, throw the error (caller needs to handle it)
+      if (params.returnData) {
+        throw error;
+      }
+      
+      // Otherwise, don't throw error, proceed with data already in Supabase
       // This ensures the application continues to work even if QuickFlora API is down
     }
   }
+
+
 
   /**
    * Common method to fetch deliveries using the same filtering logic
@@ -198,7 +213,7 @@ export class DeliveryService {
     userId: string;
     companyId: string;
     employeeId: string;
-  }): Promise<any[]> {
+  }, status?: string): Promise<any[]> {
     // Require user context
     if (!userContext || !userContext.sessionId || !userContext.companyId) {
       throw new Error('Authentication required - user context missing');
@@ -208,7 +223,7 @@ export class DeliveryService {
     await this.syncDeliveriesFromQuickFlora({
       fromDate: date,
       toDate: date,
-      status: 'Booked', // Only fetch Booked status
+      status: status, // Use provided status or undefined for all
       limit: limit,
       userContext: userContext
     });
@@ -217,7 +232,7 @@ export class DeliveryService {
     return await this.supabaseService.getDeliveries({
       fromDate: date,
       toDate: date,
-      status: 'Booked', // Only fetch Booked status
+      status: status, // Use provided status or undefined for all
       limit: limit,
       companyId: userContext.companyId // Always filter by user's company
     });

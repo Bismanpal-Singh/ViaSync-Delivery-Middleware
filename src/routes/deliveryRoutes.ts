@@ -22,6 +22,9 @@ router.get('/deliveries', DeliveryController.getAllDeliveries);
 // Get all pending deliveries for a date (for map display) - backward compatibility
 router.get('/pending', DeliveryController.getAllDeliveries);
 
+// Get dashboard statistics
+router.get('/dashboard-stats', DeliveryController.getDashboardStats);
+
 // Get a single delivery by ID
 router.get('/:id', DeliveryController.getDeliveryById);
 

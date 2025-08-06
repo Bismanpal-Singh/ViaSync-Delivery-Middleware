@@ -239,7 +239,8 @@ export const getAllDeliveries = async (req: Request, res: Response): Promise<voi
       
       try {
         // Get deliveries with sync using authenticated user context
-        deliveries = await deliveryService.getPendingDeliveriesForDate(date, limit, userContext);
+        // For the pending endpoint, we only want Booked status
+        deliveries = await deliveryService.getPendingDeliveriesForDate(date, limit, userContext, 'Booked');
       } catch (error) {
         console.error('❌ Failed to get deliveries:', error);
         res.status(500).json({
@@ -389,6 +390,60 @@ export const getPendingDeliveriesWithCoords = async (req: Request, res: Response
   } catch (error) {
     console.error('❌ Failed to get pending deliveries with coords:', error);
     res.status(500).json({ success: false, error: 'Failed to get pending deliveries with coordinates' });
+  }
+};
+
+export const getDashboardStats = async (req: Request, res: Response): Promise<void> => {
+  const { date } = req.query;
+  const userContext = req.user;
+
+  try {
+    console.log(`📊 Getting dashboard stats for date: ${date}`);
+    
+    // Require authentication
+    if (!userContext) {
+      res.status(401).json({
+        success: false,
+        error: 'Authentication required'
+      });
+      return;
+    }
+
+    // Use current date if none provided
+    const targetDate = date as string || new Date().toISOString().split('T')[0];
+    
+    // Get deliveries directly from QuickFlora API (no Supabase)
+    const allDeliveries = await deliveryService.syncDeliveriesFromQuickFlora({
+      fromDate: targetDate,
+      toDate: targetDate,
+      status: undefined, // Get ALL statuses
+      userContext: userContext,
+      returnData: true // Return data directly, skip Supabase sync
+    });
+
+    // Handle the return type (can be void or any[])
+    const deliveries = Array.isArray(allDeliveries) ? allDeliveries : [];
+
+    // Simple stats - just total count for now
+    const stats = {
+      total: deliveries.length
+    };
+    
+    res.json({
+      success: true,
+      data: {
+        stats: stats,
+        date: targetDate,
+        timestamp: new Date().toISOString()
+      }
+    });
+
+  } catch (error) {
+    console.error('❌ Failed to get dashboard stats:', error);
+    res.status(500).json({
+      success: false,
+      error: error instanceof Error ? error.message : 'Failed to fetch dashboard stats'
+    });
   }
 };
 
