@@ -6,13 +6,24 @@ import { GeocodingService } from '../services/GeocodingService';
 import { AuthService } from '../services/AuthService';
 
 // Initialize services
-const authService = new AuthService();
-const deliveryService = new DeliveryService(authService);
-const supabaseService = new SupabaseService({
-  url: config.supabase.url,
-  key: config.supabase.anonKey
-});
-const geocodingService = new GeocodingService();
+let authService: AuthService;
+let deliveryService: DeliveryService;
+let supabaseService: SupabaseService;
+let geocodingService: GeocodingService;
+
+try {
+  authService = new AuthService();
+  deliveryService = new DeliveryService(authService);
+  supabaseService = new SupabaseService({
+    url: config.supabase.url,
+    key: config.supabase.anonKey
+  });
+  geocodingService = new GeocodingService();
+  console.log('✅ All services initialized successfully');
+} catch (error) {
+  console.error('❌ Failed to initialize services:', error);
+  throw error; // This will prevent the server from starting with missing config
+}
 
 export const optimizeDelivery = async (req: Request, res: Response): Promise<void> => {
   const { depotAddress, deliveries, vehicleCapacities } = req.body;
@@ -198,27 +209,86 @@ export const healthCheck = async (_req: Request, res: Response): Promise<void> =
 };
 
 export const getAllDeliveries = async (req: Request, res: Response): Promise<void> => {
-  const { fromDate, toDate, status } = req.query;
+  const { fromDate, toDate, status, date } = req.query;
   const limit = req.query.limit ? parseInt(req.query.limit as string) : 50;
   const offset = req.query.offset ? parseInt(req.query.offset as string) : 0;
 
-  try {
-    const deliveries = await supabaseService.getDeliveries({
-      fromDate: fromDate as string,
-      toDate: toDate as string,
-      status: status as string,
-      limit,
-      offset
-    });
+  // Get user context from request (set by auth middleware)
+  const userContext = req.user;
 
-    // Return a raw array as expected by the frontend
-    res.json(deliveries);
+  try {
+    console.log(`🔍 Fetching deliveries with params:`, { fromDate, toDate, status, date, limit, offset });
+    if (userContext) {
+      console.log(`👤 User context: ${userContext.userId} (${userContext.companyId})`);
+    }
+
+    let deliveries;
+    
+    // If a specific date is provided, use the enhanced function with stats
+    if (date && typeof date === 'string') {
+      console.log(`📊 Getting deliveries with stats for date: ${date}`);
+      
+      // Require authentication for this endpoint
+      if (!userContext) {
+        res.status(401).json({
+          success: false,
+          error: 'Authentication required'
+        });
+        return;
+      }
+      
+      try {
+        // Get deliveries with sync using authenticated user context
+        deliveries = await deliveryService.getPendingDeliveriesForDate(date, limit, userContext);
+      } catch (error) {
+        console.error('❌ Failed to get deliveries:', error);
+        res.status(500).json({
+          success: false,
+          error: error instanceof Error ? error.message : 'Failed to fetch deliveries'
+        });
+        return;
+      }
+      
+      // Calculate dashboard statistics
+      const stats = calculateDashboardStats(deliveries);
+      
+      // Return enhanced response with stats
+      res.json({
+        success: true,
+        data: {
+          deliveries: deliveries,
+          stats: stats,
+          date: date,
+          timestamp: new Date().toISOString()
+        }
+      });
+    } else {
+      // Use the original logic for date ranges
+      console.log(`📊 Getting deliveries for date range: ${fromDate} to ${toDate}`);
+      deliveries = await supabaseService.getDeliveries({
+        fromDate: fromDate as string,
+        toDate: toDate as string,
+        status: status as string,
+        limit,
+        offset,
+        companyId: userContext?.companyId
+      });
+
+      // Return a raw array as expected by the frontend (backward compatibility)
+      res.json(deliveries);
+    }
 
   } catch (error) {
     console.error('❌ Failed to get deliveries:', error);
+    console.error('❌ Error details:', {
+      message: error instanceof Error ? error.message : 'Unknown error',
+      stack: error instanceof Error ? error.stack : 'No stack trace',
+      userContext: userContext ? 'Present' : 'Missing'
+    });
     res.status(500).json({
       success: false,
-      error: error instanceof Error ? error.message : 'Unknown error occurred'
+      error: error instanceof Error ? error.message : 'Unknown error occurred',
+      details: process.env.NODE_ENV === 'development' ? error instanceof Error ? error.stack : 'No stack trace' : undefined
     });
   }
 };
@@ -322,57 +392,92 @@ export const getPendingDeliveriesWithCoords = async (req: Request, res: Response
   }
 };
 
-export const getPendingDeliveriesByDate = async (req: Request, res: Response): Promise<void> => {
-  const { date } = req.query;
-  if (!date || typeof date !== 'string') {
-    res.status(400).json({ success: false, error: 'Missing or invalid date parameter' });
-    return;
-  }
+// REMOVED: getPendingDeliveriesByDate - functionality merged into getAllDeliveries
 
-  // Get user context from request (set by auth middleware)
-  const userContext = req.user;
-
-  try {
-    console.log(`🔍 Fetching pending deliveries for date: ${date}`);
-    if (userContext) {
-      console.log(`👤 User context: ${userContext.userId} (${userContext.companyId})`);
-    } else {
-      console.log('⚠️ No user context - using fallback authentication');
-    }
-
-    // Use DeliveryService to get deliveries with user context
-    const deliveries = await deliveryService.getPendingDeliveriesForDate(date, 200, userContext);
+/**
+ * Calculate dashboard statistics from delivery data
+ */
+function calculateDashboardStats(deliveries: any[]) {
+  const stats = {
+    // Main Stats Cards
+    total: deliveries.length,
+    delivered: 0,
+    inProgress: 0, // Shipped + In Transit
+    activeDrivers: 0,
     
-    console.log(`🔎 Fetched ${deliveries.length} deliveries for date ${date}`);
-    if (deliveries.length > 0) {
-      console.log('🔎 First 3 deliveries:', deliveries.slice(0, 3));
+    // Performance Overview
+    completionRate: 0,
+    remaining: 0,
+    urgentDeliveries: 0,
+    
+    // Status Breakdown
+    booked: 0,
+    shipped: 0,
+    inTransit: 0,
+    
+    // Driver tracking
+    uniqueDrivers: new Set<string>()
+  };
+
+  deliveries.forEach(delivery => {
+    const status = delivery.status || delivery.order_status || 'Unknown';
+    const priority = delivery.priority || '';
+    const assignedTo = delivery.assigned_to;
+
+    // Count by status
+    switch (status.toLowerCase()) {
+      case 'delivered':
+        stats.delivered++;
+        break;
+      case 'shipped':
+        stats.shipped++;
+        stats.inProgress++;
+        break;
+      case 'in transit':
+        stats.inTransit++;
+        stats.inProgress++;
+        break;
+      case 'booked':
+        stats.booked++;
+        break;
     }
 
-    // For each delivery, get lat/lon from cache or geocode
-    const results = await Promise.all(deliveries.map(async (d: any) => {
-      const address = `${d.address_1}, ${d.city}, ${d.zip}`;
-      console.log('🔎 Geocoding address:', address);
-      const coords = await geocodingService.geocodeAddress(address);
-      if (!coords) return null;
-      return {
-        id: d.id,
-        address,
-        latitude: coords.lat,
-        longitude: coords.lon
-      };
-    }));
+    // Count high priority deliveries
+    if (priority && (priority.includes('11AM') || priority === 'AM Delivery')) {
+      stats.urgentDeliveries++;
+    }
 
-    // Only return deliveries with valid coordinates
-    const filtered = results.filter((r) => !!r);
-    res.json(filtered);
-  } catch (err) {
-    console.error('❌ Failed to fetch pending deliveries:', err);
-    res.status(500).json({ 
-      success: false, 
-      error: 'Failed to fetch pending deliveries', 
-      details: err instanceof Error ? err.message : String(err) 
-    });
-  }
-};
+    // Track unique drivers
+    if (assignedTo && assignedTo.trim()) {
+      stats.uniqueDrivers.add(assignedTo.trim());
+    }
+  });
+
+  // Calculate derived stats
+  stats.remaining = stats.total - stats.delivered;
+  stats.completionRate = stats.total > 0 ? Math.round((stats.delivered / stats.total) * 100) : 0;
+  stats.activeDrivers = stats.uniqueDrivers.size;
+
+  return {
+    // Main Stats Cards
+    total: stats.total,
+    delivered: stats.delivered,
+    inProgress: stats.inProgress,
+    activeDrivers: stats.activeDrivers,
+    
+    // Performance Overview
+    completionRate: stats.completionRate,
+    remaining: stats.remaining,
+    urgentDeliveries: stats.urgentDeliveries,
+    
+    // Status Breakdown
+    booked: stats.booked,
+    shipped: stats.shipped,
+    inTransit: stats.inTransit,
+    
+    // Additional useful data
+    uniqueDrivers: Array.from(stats.uniqueDrivers)
+  };
+}
 
 

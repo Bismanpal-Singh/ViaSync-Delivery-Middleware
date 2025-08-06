@@ -4,6 +4,61 @@
 -- Enable Row Level Security (RLS)
 ALTER DATABASE postgres SET "app.jwt_secret" TO 'your-jwt-secret';
 
+-- Create comprehensive deliveries table for QuickFlora API data
+CREATE TABLE IF NOT EXISTS deliveries (
+    id SERIAL PRIMARY KEY,
+    
+    -- QuickFlora API Fields
+    row_number INTEGER,
+    tid VARCHAR(50),
+    shipping_name VARCHAR(255),
+    assigned_to VARCHAR(100),
+    shipping_company VARCHAR(255),
+    order_number VARCHAR(50) UNIQUE NOT NULL,
+    shipping_address1 TEXT,
+    shipping_address2 TEXT,
+    shipping_state VARCHAR(10),
+    shipping_city VARCHAR(100),
+    shipping_zip VARCHAR(20),
+    priority VARCHAR(50), -- Time window like "08:00-17:00"
+    destination_type VARCHAR(10),
+    assigned BOOLEAN DEFAULT false,
+    order_ship_date DATE,
+    ship_method_id VARCHAR(50),
+    trip_id VARCHAR(100),
+    not_delivered BOOLEAN DEFAULT false,
+    delivered BOOLEAN DEFAULT false,
+    order_type_id VARCHAR(50),
+    backordered BOOLEAN DEFAULT false,
+    shipped BOOLEAN DEFAULT false,
+    location_id VARCHAR(50),
+    transmit_to_delivery BOOLEAN DEFAULT false,
+    posted BOOLEAN DEFAULT false,
+    zone VARCHAR(50),
+    order_status VARCHAR(50), -- "Booked", "Invoiced", etc.
+    show_route VARCHAR(100),
+    address_verified VARCHAR(10),
+    order_reviewed BOOLEAN DEFAULT false,
+    
+    -- Multi-tenancy
+    company_id VARCHAR(100),
+    
+    -- Route Optimization Fields
+    route_optimization_id VARCHAR(100),
+    priority_start_time TIME,
+    priority_end_time TIME,
+    has_time_deadline BOOLEAN DEFAULT false,
+    deadline_priority_level INTEGER,
+    
+    -- System Fields
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    
+    -- Indexes for performance
+    CONSTRAINT idx_deliveries_order_number UNIQUE (order_number),
+    CONSTRAINT idx_deliveries_company_id UNIQUE (company_id, order_number)
+);
+
 -- Create orders table
 CREATE TABLE IF NOT EXISTS orders (
     id UUID DEFAULT gen_random_uuid() PRIMARY KEY,

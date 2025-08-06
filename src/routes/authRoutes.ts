@@ -3,8 +3,12 @@ import { AuthService } from '../services/AuthService';
 
 const router = Router();
 
-// Initialize AuthService
-const authService = new AuthService();
+// AuthService will be injected from index.ts
+let authService: AuthService;
+
+export function setAuthService(service: AuthService) {
+  authService = service;
+}
 
 /**
  * POST /api/auth/login
@@ -146,6 +150,9 @@ router.get('/session', async (req: Request, res: Response): Promise<void> => {
       return;
     }
 
+    // Get token expiration info
+    const expirationInfo = authService.getTokenExpirationInfo(sessionToken);
+
     res.json({
       error: false,
       message: 'Session valid',
@@ -157,6 +164,13 @@ router.get('/session', async (req: Request, res: Response): Promise<void> => {
         lastActivity: session.lastActivity,
         tokenExpiry: session.tokenExpiry,
         quickFloraValid: isQuickFloraValid,
+        expirationInfo: expirationInfo ? {
+          expiresAt: expirationInfo.expiresAt,
+          timeUntilExpiry: expirationInfo.timeUntilExpiry,
+          isExpiringSoon: expirationInfo.isExpiringSoon,
+          isExpired: expirationInfo.isExpired,
+          minutesUntilExpiry: Math.round(expirationInfo.timeUntilExpiry / 1000 / 60)
+        } : null
       }
     });
 
@@ -165,6 +179,52 @@ router.get('/session', async (req: Request, res: Response): Promise<void> => {
     res.status(500).json({
       error: true,
       message: 'Internal server error during session validation',
+      code: 'INTERNAL_ERROR'
+    });
+  }
+});
+
+/**
+ * POST /api/auth/refresh
+ * Refreshes session silently using stored credentials
+ */
+router.post('/refresh', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const sessionToken = req.headers['x-session-token'] as string;
+
+    if (!sessionToken) {
+      res.status(400).json({
+        error: true,
+        message: 'Session token required for refresh',
+        code: 'MISSING_SESSION_TOKEN'
+      });
+      return;
+    }
+
+    const refreshResult = await authService.refreshSessionSilently(sessionToken);
+
+    if (refreshResult.success) {
+      res.json({
+        error: false,
+        message: 'Session refreshed successfully',
+        data: {
+          newSessionId: refreshResult.newSessionId,
+          refreshed: true
+        }
+      });
+    } else {
+      res.status(401).json({
+        error: true,
+        message: refreshResult.error || 'Session refresh failed',
+        code: 'REFRESH_FAILED'
+      });
+    }
+
+  } catch (error) {
+    console.error('❌ Session refresh error:', error);
+    res.status(500).json({
+      error: true,
+      message: 'Internal server error during session refresh',
       code: 'INTERNAL_ERROR'
     });
   }

@@ -19,8 +19,8 @@ router.get('/health', DeliveryController.healthCheck);
 // Get all deliveries
 router.get('/deliveries', DeliveryController.getAllDeliveries);
 
-// Get all pending deliveries for a date (for map display)
-router.get('/pending', DeliveryController.getPendingDeliveriesByDate);
+// Get all pending deliveries for a date (for map display) - backward compatibility
+router.get('/pending', DeliveryController.getAllDeliveries);
 
 // Get a single delivery by ID
 router.get('/:id', DeliveryController.getDeliveryById);

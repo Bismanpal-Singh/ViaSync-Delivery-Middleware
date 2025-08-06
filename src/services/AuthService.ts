@@ -11,6 +11,12 @@ interface UserSession {
   tokenExpiry: Date;
   createdAt: Date;
   lastActivity: Date;
+  // Add stored credentials for auto-refresh
+  storedCredentials?: {
+    employeeID: string;
+    companyID: string;
+    employeePassword: string;
+  };
 }
 
 interface LoginCredentials {
@@ -76,6 +82,12 @@ export class AuthService {
       const decodedToken = jwtDecode<DecodedToken>(token);
       const expiryTimestamp = decodedToken.exp * 1000;
 
+      console.log('🔍 Token Analysis:');
+      console.log(`📅 Token expiry (Unix): ${decodedToken.exp}`);
+      console.log(`📅 Token expiry (Date): ${new Date(expiryTimestamp).toLocaleString()}`);
+      console.log(`⏰ Current time: ${new Date().toLocaleString()}`);
+      console.log(`⏱️ Time until expiry: ${Math.round((expiryTimestamp - Date.now()) / 1000 / 60)} minutes`);
+
       // Create session
       const sessionId = this.generateSessionId();
       const session: UserSession = {
@@ -87,6 +99,12 @@ export class AuthService {
         tokenExpiry: new Date(expiryTimestamp),
         createdAt: new Date(),
         lastActivity: new Date(),
+        // Store credentials for auto-refresh (encrypted in production)
+        storedCredentials: {
+          employeeID: credentials.employeeID,
+          companyID: credentials.companyID,
+          employeePassword: credentials.employeePassword,
+        },
       };
 
       // Store session
@@ -120,11 +138,19 @@ export class AuthService {
     const session = this.sessions.get(sessionId);
     
     if (!session) {
+      console.log(`❌ Session not found: ${sessionId}`);
       return null;
     }
 
+    console.log(`🔍 Checking session: ${sessionId}`);
+    console.log(`📅 Last activity: ${session.lastActivity.toLocaleString()}`);
+    console.log(`⏰ Current time: ${new Date().toLocaleString()}`);
+    console.log(`⏱️ Time since last activity: ${Math.round((Date.now() - session.lastActivity.getTime()) / 1000 / 60)} minutes`);
+    console.log(`⏱️ Session timeout: ${Math.round(this.SESSION_TIMEOUT / 1000 / 60)} minutes`);
+
     // Check if session has expired
     if (Date.now() > session.lastActivity.getTime() + this.SESSION_TIMEOUT) {
+      console.log(`❌ Session expired, deleting: ${sessionId}`);
       this.sessions.delete(sessionId);
       return null;
     }
@@ -132,6 +158,7 @@ export class AuthService {
     // Update last activity
     session.lastActivity = new Date();
     this.sessions.set(sessionId, session);
+    console.log(`✅ Session valid, updated last activity: ${sessionId}`);
 
     return session;
   }
@@ -148,21 +175,46 @@ export class AuthService {
       throw new Error('Invalid or expired session');
     }
 
-    // Check if token is expiring soon or if we should verify with QuickFlora
-    if (session.tokenExpiry.getTime() <= Date.now() + this.TOKEN_BUFFER) {
-      console.log('🔄 Token expiring soon, checking QuickFlora session status...');
-      const isStillValid = await this.checkQuickFloraSessionStatus(sessionId);
+    console.log(`🔍 Validating session: ${sessionId}`);
+    console.log(`📅 Token expires at: ${session.tokenExpiry.toLocaleString()}`);
+    console.log(`⏰ Current time: ${new Date().toLocaleString()}`);
+
+    // Check if token is actually expired (not just expiring soon)
+    const timeUntilExpiry = session.tokenExpiry.getTime() - Date.now();
+    const isExpired = timeUntilExpiry <= 0;
+
+    console.log(`⏱️ Time until expiry: ${Math.round(timeUntilExpiry / 1000 / 60)} minutes`);
+
+    if (isExpired) {
+      console.log('🔄 Token has expired, attempting silent refresh...');
       
-      if (!isStillValid) {
-        console.log('❌ QuickFlora session expired, removing local session');
-        this.sessions.delete(sessionId);
-        throw new Error('Session expired - please login again');
+      try {
+        const refreshResult = await this.refreshSessionSilently(sessionId);
+        if (refreshResult.success && refreshResult.newSessionId) {
+          // Get the new session
+          const newSession = this.getSession(refreshResult.newSessionId);
+          if (newSession) {
+            console.log('✅ Session refreshed successfully');
+            return newSession.bearerToken;
+          }
+        }
+      } catch (refreshError) {
+        console.warn('⚠️ Silent refresh failed:', refreshError);
       }
       
-      // Update last activity
-      session.lastActivity = new Date();
-      this.sessions.set(sessionId, session);
+      // If refresh failed, be more lenient - don't immediately check QuickFlora status
+      console.log('⚠️ Refresh failed, but continuing with current token for now');
+      // Don't delete session immediately - let it continue working
+    } else if (timeUntilExpiry <= this.TOKEN_BUFFER) {
+      // Token is expiring soon but not expired yet - just log warning
+      console.log(`⚠️ Token will expire in ${Math.round(timeUntilExpiry / 1000 / 60)} minutes`);
+    } else {
+      console.log('✅ Token is valid');
     }
+
+    // Update last activity
+    session.lastActivity = new Date();
+    this.sessions.set(sessionId, session);
 
     return session.bearerToken;
   }
@@ -195,6 +247,90 @@ export class AuthService {
     } catch (error) {
       console.log('❌ QuickFlora session expired or invalid');
       return false;
+    }
+  }
+
+  /**
+   * Performs silent re-login using stored credentials to refresh the session.
+   * @param sessionId Session identifier
+   * @returns New session information if successful
+   */
+  public async refreshSessionSilently(sessionId: string): Promise<{
+    success: boolean;
+    newSessionId?: string;
+    error?: string;
+  }> {
+    const session = this.sessions.get(sessionId);
+    
+    if (!session || !session.storedCredentials) {
+      return {
+        success: false,
+        error: 'No stored credentials for auto-refresh'
+      };
+    }
+
+    try {
+      console.log('🔄 Performing silent session refresh...');
+      
+      // Call QuickFlora login API with stored credentials
+      const response = await axios.post(
+        'https://quickflora-new.com/QuickFloraCoreAPI/Account/login',
+        session.storedCredentials,
+        {
+          headers: {
+            'Content-Type': 'application/json',
+          },
+        }
+      );
+
+      const token = response.data.token || response.data;
+      
+      if (typeof token !== 'string' || !token) {
+        throw new Error('Token not found in refresh response');
+      }
+
+      // Decode new token
+      const decodedToken = jwtDecode<DecodedToken>(token);
+      const expiryTimestamp = decodedToken.exp * 1000;
+
+      // Generate new session ID
+      const newSessionId = this.generateSessionId();
+      
+      // Create new session with same credentials
+      const newSession: UserSession = {
+        sessionId: newSessionId,
+        userId: session.userId,
+        companyId: session.companyId,
+        employeeId: session.employeeId,
+        bearerToken: token,
+        tokenExpiry: new Date(expiryTimestamp),
+        createdAt: new Date(),
+        lastActivity: new Date(),
+        storedCredentials: session.storedCredentials, // Keep credentials for future refresh
+      };
+
+      // Remove old session and add new one
+      this.sessions.delete(sessionId);
+      this.sessions.set(newSessionId, newSession);
+
+      console.log('✅ Session refreshed successfully');
+      console.log(`📅 New session expires at: ${newSession.tokenExpiry.toLocaleString()}`);
+
+      return {
+        success: true,
+        newSessionId: newSessionId
+      };
+
+    } catch (error) {
+      console.error('❌ Silent session refresh failed:', error);
+      
+      // Remove the failed session
+      this.sessions.delete(sessionId);
+      
+      return {
+        success: false,
+        error: 'Failed to refresh session - please login again'
+      };
     }
   }
 
@@ -294,6 +430,36 @@ export class AuthService {
     return {
       totalSessions: this.sessions.size,
       activeSessions: activeCount,
+    };
+  }
+
+  /**
+   * Gets token expiration information for a session.
+   * @param sessionId Session identifier
+   * @returns Token expiration info
+   */
+  public getTokenExpirationInfo(sessionId: string): {
+    expiresAt: Date;
+    timeUntilExpiry: number; // milliseconds
+    isExpiringSoon: boolean;
+    isExpired: boolean;
+  } | null {
+    const session = this.getSession(sessionId);
+    
+    if (!session) {
+      return null;
+    }
+
+    const now = Date.now();
+    const timeUntilExpiry = session.tokenExpiry.getTime() - now;
+    const isExpired = timeUntilExpiry <= 0;
+    const isExpiringSoon = timeUntilExpiry <= this.TOKEN_BUFFER;
+
+    return {
+      expiresAt: session.tokenExpiry,
+      timeUntilExpiry,
+      isExpiringSoon,
+      isExpired
     };
   }
 } 

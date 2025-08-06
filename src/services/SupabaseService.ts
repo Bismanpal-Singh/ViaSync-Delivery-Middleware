@@ -2,34 +2,60 @@ import { createClient, SupabaseClient } from '@supabase/supabase-js';
 
 interface Delivery {
   id: number;
-  sl_no?: number;
+  
+  // QuickFlora API Fields
+  row_number?: number;
+  tid?: string;
+  shipping_name?: string;
+  assigned_to?: string;
+  shipping_company?: string;
   order_number?: string;
-  trip_id?: string;
-  trip_prn?: string;
-  sorting_order?: number;
-  pack_list?: string;
-  ship_list?: string;
-  delivery_date?: string;
-  customer_name: string;
-  address_1: string;
-  city: string;
-  zip: string;
+  shipping_address1?: string;
+  shipping_address2?: string;
+  shipping_state?: string;
+  shipping_city?: string;
+  shipping_zip?: string;
   priority?: string;
   destination_type?: string;
-  status?: string;
-  map_link?: string;
-  verified?: boolean;
-  delivery_notes?: string;
-  zone?: string;
+  assigned?: boolean;
+  order_ship_date?: string;
+  ship_method_id?: string;
+  trip_id?: string;
+  not_delivered?: boolean;
+  delivered?: boolean;
+  order_type_id?: string;
+  backordered?: boolean;
+  shipped?: boolean;
   location_id?: string;
-  assigned_to?: string;
-  created_at?: string;
-  updated_at?: string;
+  transmit_to_delivery?: boolean;
+  posted?: boolean;
+  zone?: string;
+  order_status?: string; // "Booked", "Invoiced", etc.
+  show_route?: string;
+  address_verified?: string;
+  order_reviewed?: boolean;
+  
+  // Multi-tenancy
+  company_id?: string;
+  
+  // Route Optimization Fields
   route_optimization_id?: string;
   priority_start_time?: string;
   priority_end_time?: string;
   has_time_deadline?: boolean;
   deadline_priority_level?: number;
+  
+  // System Fields
+  created_at?: string;
+  updated_at?: string;
+  
+  // Legacy fields for backward compatibility
+  customer_name?: string; // Maps to shipping_name
+  address_1?: string; // Maps to shipping_address1
+  city?: string; // Maps to shipping_city
+  zip?: string; // Maps to shipping_zip
+  status?: string; // Maps to order_status
+  delivery_date?: string; // Maps to order_ship_date
 }
 
 interface CompanyLocation {
@@ -78,6 +104,7 @@ export class SupabaseService {
     status?: string;
     limit?: number;
     offset?: number;
+    companyId?: string; // Added for multi-tenancy
   }): Promise<Delivery[]> {
     try {
       console.log('Fetching deliveries from Supabase...');
@@ -89,20 +116,25 @@ export class SupabaseService {
 
       // Apply date filters if provided
       if (params.fromDate) {
-        query = query.gte('delivery_date', params.fromDate);
+        query = query.gte('order_ship_date', params.fromDate);
       }
       if (params.toDate) {
-        query = query.lte('delivery_date', params.toDate);
+        query = query.lte('order_ship_date', params.toDate);
       }
 
       // Apply status filter if provided
       if (params.status) {
         if (params.status.includes(',')) {
           const statuses = params.status.split(',').map(s => s.trim());
-          query = query.in('status', statuses);
+          query = query.in('order_status', statuses);
         } else {
-        query = query.eq('status', params.status);
+        query = query.eq('order_status', params.status);
         }
+      }
+
+      // Apply company filter if provided (for multi-tenancy)
+      if (params.companyId) {
+        query = query.eq('company_id', params.companyId);
       }
 
       // Apply pagination
@@ -338,18 +370,19 @@ export class SupabaseService {
     return shopName;
   }
 
-  // Helper method to format delivery address from address_1, city, zip
+  // Helper method to format delivery address from shipping fields
   formatDeliveryAddress(delivery: Delivery): string {
-    const address = delivery.address_1?.trim() || '';
-    const city = delivery.city?.trim() || '';
-    const zip = delivery.zip?.trim() || '';
+    // Use new field names if available, fall back to legacy fields
+    const address1 = delivery.shipping_address1 || delivery.address_1;
+    const address2 = delivery.shipping_address2;
+    const city = delivery.shipping_city || delivery.city;
+    const state = delivery.shipping_state;
+    const zip = delivery.shipping_zip || delivery.zip;
     
-    if (address && city && zip) {
-      return `${address}, ${city}, ${zip}`;
-    } else if (address && city) {
-      return `${address}, ${city}`;
-    } else if (address) {
-      return address;
+    const addressParts = [address1, address2, city, state, zip].filter(Boolean);
+    
+    if (addressParts.length > 0) {
+      return addressParts.join(', ');
     }
     
     return 'Address not available';
@@ -398,7 +431,7 @@ export class SupabaseService {
    * Syncs delivery data from QuickFlora API to Supabase database.
    * Performs an upsert operation to add new deliveries and update existing ones.
    */
-  async syncWithQuickFlora(deliveries: any[]): Promise<{ added: number, updated: number, failed: number }> {
+  async syncWithQuickFlora(deliveries: any[], companyId?: string): Promise<{ added: number, updated: number, failed: number }> {
     if (!deliveries || deliveries.length === 0) {
       return { added: 0, updated: 0, failed: 0 };
     }
@@ -418,17 +451,52 @@ export class SupabaseService {
       const { priority_start_time, priority_end_time } = parseTimeWindow(d.Priority);
       
       return {
+        // QuickFlora API Fields
+        row_number: d.rowNumber,
+        tid: d.TID,
+        shipping_name: d.ShippingName,
+        assigned_to: d.Assignedto,
+        shipping_company: d.ShippingCompany,
         order_number: d.OrderNumber,
+        shipping_address1: d.ShippingAddress1,
+        shipping_address2: d.ShippingAddress2,
+        shipping_state: d.ShippingState,
+        shipping_city: d.ShippingCity,
+        shipping_zip: d.ShippingZip,
+        priority: d.Priority,
+        destination_type: d.DestinationType,
+        assigned: d.Assigned === 1,
+        order_ship_date: d.OrderShipDate,
+        ship_method_id: d.ShipMethodID,
+        trip_id: d.TripID,
+        not_delivered: d.NotDelivered,
+        delivered: d.Delivered,
+        order_type_id: d.OrderTypeID,
+        backordered: d.Backordered,
+        shipped: d.Shipped,
+        location_id: d.LocationID,
+        transmit_to_delivery: d.TransmitToDelivery,
+        posted: d.Posted,
+        zone: d.Zone,
+        order_status: d.OrderStatus,
+        show_route: d.ShowRoute,
+        address_verified: d.AddressVerified,
+        order_reviewed: d.OrderReveiwed,
+        
+        // Multi-tenancy
+        company_id: companyId,
+        
+        // Route Optimization Fields
+        priority_start_time,
+        priority_end_time,
+        
+        // Legacy fields for backward compatibility
         customer_name: d.ShippingName || 'N/A',
         address_1: d.ShippingAddress1,
         city: d.ShippingCity,
         zip: d.ShippingZip,
-        status: d.OrderStatus, // e.g., "Invoiced", "Booked"
-        delivery_date: d.OrderShipDate,
-        priority: d.Priority,
-        priority_start_time,
-        priority_end_time,
-        assigned_to: d.Assignedto
+        status: d.OrderStatus,
+        delivery_date: d.OrderShipDate
         // Note: 'id' is auto-generated by Supabase and should not be included here.
         // The 'onConflict' option will use 'order_number' to find duplicates.
       };

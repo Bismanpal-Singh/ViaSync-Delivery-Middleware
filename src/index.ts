@@ -8,7 +8,7 @@ import helmet from 'helmet';
 import morgan from 'morgan';
 import deliveryRoutes from './routes/deliveryRoutes';
 import routeRoutes from './routes/routeRoutes';
-import authRoutes from './routes/authRoutes';
+import authRoutes, { setAuthService } from './routes/authRoutes';
 import { authenticateUser, optionalAuth } from './middleware/authMiddleware';
 import { AuthService } from './services/AuthService';
 
@@ -17,6 +17,9 @@ const PORT = process.env.PORT || 3000;
 
 // Initialize AuthService for middleware
 const authService = new AuthService();
+
+// Pass the same AuthService instance to auth routes
+setAuthService(authService);
 
 // CORS configuration for Vite frontend
 const corsOptions = {
@@ -81,8 +84,8 @@ app.get('/health', (req, res) => {
 app.use('/api/auth', authRoutes);
 
 // API routes with authentication
-app.use('/api/delivery', optionalAuth(authService), deliveryRoutes);
-app.use('/api/routes', optionalAuth(authService), routeRoutes);
+app.use('/api/delivery', authenticateUser(authService), deliveryRoutes);
+app.use('/api/routes', authenticateUser(authService), routeRoutes);
 
 // Error handling middleware
 app.use((err: Error, req: express.Request, res: express.Response, next: express.NextFunction) => {

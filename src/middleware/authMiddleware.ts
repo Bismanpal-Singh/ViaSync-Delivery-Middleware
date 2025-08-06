@@ -22,10 +22,16 @@ declare global {
 export function authenticateUser(authService: AuthService) {
   return async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
+      console.log('🔐 Authentication middleware called');
+      console.log('📋 Request headers:', Object.keys(req.headers));
+      
       // Get session token from headers
       const sessionToken = req.headers['x-session-token'] as string;
       
+      console.log('🎫 Session token received:', sessionToken ? `${sessionToken.substring(0, 10)}...` : 'NOT FOUND');
+      
       if (!sessionToken) {
+        console.log('❌ No session token provided');
         res.status(401).json({
           error: true,
           message: 'Session token required',
@@ -35,9 +41,18 @@ export function authenticateUser(authService: AuthService) {
       }
 
       // Validate session
+      console.log('🔍 Validating session token...');
+      
+      // Debug: Check available sessions
+      const sessionStats = authService.getSessionStats();
+      console.log('📊 Available sessions:', sessionStats);
+      
       const session = authService.getSession(sessionToken);
       
+      console.log('📊 Session validation result:', session ? 'FOUND' : 'NOT FOUND');
+      
       if (!session) {
+        console.log('❌ Session validation failed');
         res.status(401).json({
           error: true,
           message: 'Invalid or expired session',

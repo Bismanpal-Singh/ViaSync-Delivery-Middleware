@@ -80,10 +80,18 @@ export class DeliveryService {
 
   constructor(authService?: any) {
     // Initialize with environment variables
+    const supabaseUrl = process.env.SUPABASE_URL;
+    const supabaseKey = process.env.SUPABASE_ANON_KEY;
+    
+    if (!supabaseUrl || !supabaseKey) {
+      throw new Error('Missing required environment variables: SUPABASE_URL and SUPABASE_ANON_KEY');
+    }
+    
     const config = {
-      url: process.env.SUPABASE_URL!,
-      key: process.env.SUPABASE_ANON_KEY!
+      url: supabaseUrl,
+      key: supabaseKey
     };
+    
     this.supabaseService = new SupabaseService(config);
     this.distanceMatrixService = new DistanceMatrixService();
     this.geocodingService = new GeocodingService();
@@ -116,15 +124,21 @@ export class DeliveryService {
       let token: string;
       let companyId: string;
       
-      // Use user context if available, otherwise fall back to environment variables
-      if (params.userContext && this.authService) {
-        console.log(`🔐 Using authenticated user context: ${params.userContext.userId} (${params.userContext.companyId})`);
-        token = await this.authService.getValidBearerToken(params.userContext.sessionId);
-        companyId = params.userContext.companyId;
+      // Try user authentication first, fallback to token manager if needed
+      if (params.userContext && this.authService && params.userContext.sessionId) {
+        try {
+          console.log(`🔐 Using authenticated user context: ${params.userContext.userId} (${params.userContext.companyId})`);
+          token = await this.authService.getValidBearerToken(params.userContext.sessionId);
+          companyId = params.userContext.companyId;
+        } catch (authError) {
+          console.warn('⚠️ User authentication failed, falling back to token manager:', authError);
+          token = await this.quickFloraTokenManager.getValidToken();
+          companyId = process.env.QUICKFLORA_COMPANY_ID || 'DEFAULT';
+        }
       } else {
-        console.log('⚠️ Using fallback token manager (no user context)');
+        console.log('⚠️ No user context, using token manager');
         token = await this.quickFloraTokenManager.getValidToken();
-        companyId = process.env.QUICKFLORA_COMPANY_ID || "GTSFlowersInc28110";
+        companyId = process.env.QUICKFLORA_COMPANY_ID || 'DEFAULT';
       }
       
       // Prepare the request payload for QuickFlora API
@@ -160,8 +174,8 @@ export class DeliveryService {
       if (response.data && response.data.data) {
         console.log(`📡 Fetched ${response.data.data.length} deliveries from QuickFlora API.`);
         
-        // Sync the data to Supabase
-        const syncResult = await this.supabaseService.syncWithQuickFlora(response.data.data);
+        // Sync the data to Supabase with company ID
+        const syncResult = await this.supabaseService.syncWithQuickFlora(response.data.data, companyId);
         console.log(`✅ Sync completed: ${syncResult.added} added, ${syncResult.updated} updated, ${syncResult.failed} failed.`);
       } else {
         console.log('📭 No deliveries found from QuickFlora API.');
@@ -179,27 +193,33 @@ export class DeliveryService {
    * as the GET /api/delivery/pending endpoint
    * This ensures consistency between what the user sees and what gets optimized
    */
-  public async getPendingDeliveriesForDate(date: string, limit: number = 200, userContext?: {
+  public async getPendingDeliveriesForDate(date: string, limit: number = 200, userContext: {
     sessionId: string;
     userId: string;
     companyId: string;
     employeeId: string;
   }): Promise<any[]> {
-    // First, sync the latest data from QuickFlora
+    // Require user context
+    if (!userContext || !userContext.sessionId || !userContext.companyId) {
+      throw new Error('Authentication required - user context missing');
+    }
+
+    // First, sync the latest data from QuickFlora using user's credentials
     await this.syncDeliveriesFromQuickFlora({
       fromDate: date,
       toDate: date,
-      status: 'Booked,Invoiced', // Updated to use the confirmed statuses
+      status: 'Booked', // Only fetch Booked status
       limit: limit,
       userContext: userContext
     });
 
-    // Then fetch from Supabase (now with fresh data)
+    // Then fetch from Supabase filtered by user's company
     return await this.supabaseService.getDeliveries({
       fromDate: date,
       toDate: date,
-      status: 'Booked,Invoiced', // Updated to use the confirmed statuses
-      limit: limit
+      status: 'Booked', // Only fetch Booked status
+      limit: limit,
+      companyId: userContext.companyId // Always filter by user's company
     });
   }
 
@@ -787,6 +807,12 @@ export class DeliveryService {
       if (params.fromDate && params.toDate && params.fromDate === params.toDate) {
         // Single date - use the same logic as pending endpoint
         console.log(`📅 Using single date filtering (same as GET /api/delivery/pending): ${params.fromDate}`);
+        
+        // Require user context for single date filtering
+        if (!params.userContext) {
+          throw new Error('Authentication required for single date filtering');
+        }
+        
         deliveries = await this.getPendingDeliveriesForDate(params.fromDate, params.limit || 200, params.userContext);
       } else {
         // Date range or other criteria - use the original logic but with consistent status
@@ -797,7 +823,7 @@ export class DeliveryService {
           await this.syncDeliveriesFromQuickFlora({
             fromDate: params.fromDate,
             toDate: params.toDate,
-            status: 'Booked,Invoiced',
+            status: 'Booked',
             limit: params.limit || 200,
             userContext: params.userContext
           });
@@ -807,9 +833,10 @@ export class DeliveryService {
         deliveries = await this.supabaseService.getDeliveries({
           fromDate: params.fromDate,
           toDate: params.toDate,
-          status: 'Booked,Invoiced', // Updated to use the confirmed statuses
+          status: 'Booked', // Only fetch Booked status
           limit: params.limit || 200, // Use same default limit as pending endpoint
-          offset: params.offset || 0
+          offset: params.offset || 0,
+          companyId: params.userContext?.companyId // Filter by company if user context available
         });
       }
 
