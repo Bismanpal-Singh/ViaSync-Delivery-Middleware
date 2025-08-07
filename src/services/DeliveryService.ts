@@ -143,13 +143,20 @@ export class DeliveryService {
       }
       
       // Prepare the request payload for QuickFlora API
-      // Use full day range to get ALL deliveries for the date
+      // Use date-only format to avoid timezone confusion
+      const targetDate = params.fromDate || new Date().toISOString().split('T')[0];
+      
+      console.log(`🔍 Debug: Date range for QuickFlora API:`);
+      console.log(`  Input date: ${targetDate}`);
+      console.log(`  API fromDate: ${targetDate}`);
+      console.log(`  API toDate: ${targetDate}`);
+      
       const requestPayload = {
         companyID: companyId,
         divisionID: "DEFAULT",
         departmentID: "DEFAULT",
-        fromDate: params.fromDate ? new Date(params.fromDate + 'T00:00:00.000Z').toISOString() : new Date().toISOString(),
-        toDate: params.toDate ? new Date(params.toDate + 'T23:59:59.999Z').toISOString() : new Date().toISOString(),
+        fromDate: targetDate,
+        toDate: targetDate,
         locationID: "DEFAULT",
         wholesaleLocationID: true,
         zoneID: "",
