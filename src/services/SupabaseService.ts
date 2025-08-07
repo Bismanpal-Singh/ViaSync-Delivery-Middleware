@@ -104,15 +104,13 @@ export class SupabaseService {
     status?: string;
     limit?: number;
     offset?: number;
-    companyId?: string; // Added for multi-tenancy
+    companyId?: string;
   }): Promise<Delivery[]> {
     try {
-      console.log('Fetching deliveries from Supabase...');
-      
       let query = this.supabase
-        .from('deliveries')
+        .from('quickflora_deliveries')
         .select('*')
-        .order('delivery_date', { ascending: false });
+        .order('order_ship_date', { ascending: false });
 
       // Apply date filters if provided
       if (params.fromDate) {
@@ -148,14 +146,13 @@ export class SupabaseService {
       const { data, error } = await query;
 
       if (error) {
-        console.error('❌ Supabase query error:', error);
+        console.error('Supabase query error:', error);
         throw new Error(`Failed to fetch deliveries: ${error.message}`);
       }
 
-      console.log(`✅ Retrieved ${data?.length || 0} deliveries from Supabase`);
       return data || [];
     } catch (error) {
-      console.error('❌ Failed to fetch deliveries from Supabase:', error);
+      console.error('Failed to fetch deliveries from Supabase:', error);
       throw new Error('Failed to fetch deliveries from database');
     }
   }
@@ -175,17 +172,17 @@ export class SupabaseService {
       const statuses = statusFilter.split(',');
       
       let query = this.supabase
-        .from('deliveries')
+        .from('quickflora_deliveries')
         .select('*')
-        .in('status', statuses)
-        .order('delivery_date', { ascending: false });
+        .in('order_status', statuses)
+        .order('order_ship_date', { ascending: false });
 
       // Apply date filters
       if (params.fromDate) {
-        query = query.gte('delivery_date', params.fromDate);
+        query = query.gte('order_ship_date', params.fromDate);
       }
       if (params.toDate) {
-        query = query.lte('delivery_date', params.toDate);
+        query = query.lte('order_ship_date', params.toDate);
       }
 
       const { data, error } = await query;
@@ -436,8 +433,6 @@ export class SupabaseService {
       return { added: 0, updated: 0, failed: 0 };
     }
 
-    console.log(`🔄 Syncing ${deliveries.length} deliveries from QuickFlora to Supabase...`);
-
     const recordsToUpsert = deliveries.map(d => {
       // Helper function to parse time windows like "08:00-17:00"
       const parseTimeWindow = (priority: string) => {
@@ -450,79 +445,73 @@ export class SupabaseService {
 
       const { priority_start_time, priority_end_time } = parseTimeWindow(d.Priority);
       
-      return {
-        // QuickFlora API Fields
+      // Create record with ALL fields from QuickFlora API response
+      const record: any = {
+        // QuickFlora API Fields - mapped exactly as returned
         row_number: d.rowNumber,
-        tid: d.TID,
-        shipping_name: d.ShippingName,
-        assigned_to: d.Assignedto,
-        shipping_company: d.ShippingCompany,
+        tid: d.TID || '',
+        shipping_name: (d.ShippingName && d.ShippingName.trim()) ? d.ShippingName.trim() : '',
+        assigned_to: d.Assignedto || '',
+        shipping_company: d.ShippingCompany || '',
         order_number: d.OrderNumber,
-        shipping_address1: d.ShippingAddress1,
-        shipping_address2: d.ShippingAddress2,
-        shipping_state: d.ShippingState,
-        shipping_city: d.ShippingCity,
-        shipping_zip: d.ShippingZip,
-        priority: d.Priority,
-        destination_type: d.DestinationType,
-        assigned: d.Assigned === 1,
+        shipping_address1: d.ShippingAddress1 || '',
+        shipping_address2: d.ShippingAddress2 || '',
+        shipping_state: d.ShippingState || '',
+        shipping_city: d.ShippingCity || '',
+        shipping_zip: d.ShippingZip || '',
+        priority: d.Priority || '',
+        destination_type: d.DestinationType || '',
+        assigned: d.Assigned === 1 || d.Assigned === true,
         order_ship_date: d.OrderShipDate,
-        ship_method_id: d.ShipMethodID,
-        trip_id: d.TripID,
-        not_delivered: d.NotDelivered,
-        delivered: d.Delivered,
-        order_type_id: d.OrderTypeID,
-        backordered: d.Backordered,
-        shipped: d.Shipped,
-        location_id: d.LocationID,
-        transmit_to_delivery: d.TransmitToDelivery,
-        posted: d.Posted,
-        zone: d.Zone,
-        order_status: d.OrderStatus,
-        show_route: d.ShowRoute,
-        address_verified: d.AddressVerified,
-        order_reviewed: d.OrderReveiwed,
+        ship_method_id: d.ShipMethodID || '',
+        trip_id: (d.TripID && typeof d.TripID === 'string') ? d.TripID : '',
+        not_delivered: d.NotDelivered === 1 || d.NotDelivered === true || false,
+        delivered: d.Delivered === 1 || d.Delivered === true || false,
+        order_type_id: d.OrderTypeID || '',
+        backordered: d.Backordered === 1 || d.Backordered === true || false,
+        shipped: d.Shipped === 1 || d.Shipped === true || false,
+        location_id: d.LocationID || '',
+        transmit_to_delivery: d.TransmitToDelivery === 1 || d.TransmitToDelivery === true || false,
+        posted: d.Posted === 1 || d.Posted === true || false,
+        zone: d.Zone || '',
+        order_status: d.OrderStatus || '',
+        show_route: d.ShowRoute || '',
+        address_verified: d.AddressVerified || '',
+        order_reviewed: d.OrderReveiwed === 1 || d.OrderReveiwed === true || false,
         
         // Multi-tenancy
         company_id: companyId,
         
-        // Route Optimization Fields
+        // Route Optimization Fields (parsed from Priority)
         priority_start_time,
         priority_end_time,
         
         // Legacy fields for backward compatibility
-        customer_name: d.ShippingName || 'N/A',
-        address_1: d.ShippingAddress1,
-        city: d.ShippingCity,
-        zip: d.ShippingZip,
-        status: d.OrderStatus,
+        customer_name: (d.ShippingName && d.ShippingName.trim()) ? d.ShippingName.trim() : 'N/A',
+        address_1: d.ShippingAddress1 || '',
+        city: d.ShippingCity || '',
+        zip: d.ShippingZip || '',
+        status: d.OrderStatus || '',
         delivery_date: d.OrderShipDate
-        // Note: 'id' is auto-generated by Supabase and should not be included here.
-        // The 'onConflict' option will use 'order_number' to find duplicates.
       };
+
+      return record;
     });
 
     const { data, error, count } = await this.supabase
-      .from('deliveries')
+      .from('quickflora_deliveries')
       .upsert(recordsToUpsert, {
-        onConflict: 'order_number', // This is the constraint name for finding duplicates
-        ignoreDuplicates: false, // We want to update existing records
-      });
+        onConflict: 'order_number',
+        ignoreDuplicates: false,
+      })
+      .select();
 
     if (error) {
-      console.error('❌ Supabase upsert error:', error);
-      // Even if there's an error, some might have succeeded.
-      // We'll report all as failed for simplicity.
+      console.error('Supabase upsert error:', error);
       return { added: 0, updated: 0, failed: deliveries.length };
     }
     
-    // Supabase v2's upsert doesn't give a clear added/updated count.
-    // We'll just log the total count of successful operations.
     const successfulCount = count || 0;
-    console.log(`✅ Successfully upserted ${successfulCount} records.`);
-
-    // This is a simplified summary. A more detailed added/updated count
-    // would require fetching existing IDs first.
     return { added: successfulCount, updated: 0, failed: deliveries.length - successfulCount };
   }
 } 

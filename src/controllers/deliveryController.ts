@@ -16,12 +16,12 @@ try {
   deliveryService = new DeliveryService(authService);
   supabaseService = new SupabaseService({
     url: config.supabase.url,
-    key: config.supabase.anonKey
+    key: config.supabase.serviceKey || config.supabase.anonKey
   });
   geocodingService = new GeocodingService();
-  console.log('✅ All services initialized successfully');
+  console.log('All services initialized successfully');
 } catch (error) {
-  console.error('❌ Failed to initialize services:', error);
+      console.error('Failed to initialize services:', error);
   throw error; // This will prevent the server from starting with missing config
 }
 
@@ -60,7 +60,7 @@ export const optimizeDelivery = async (req: Request, res: Response): Promise<voi
     });
 
   } catch (error) {
-    console.error('❌ Route optimization failed:', error);
+    console.error('Route optimization failed:', error);
     res.status(500).json({
       success: false,
       error: error instanceof Error ? error.message : 'Unknown error occurred',
@@ -217,17 +217,10 @@ export const getAllDeliveries = async (req: Request, res: Response): Promise<voi
   const userContext = req.user;
 
   try {
-    console.log(`🔍 Fetching deliveries with params:`, { fromDate, toDate, status, date, limit, offset });
-    if (userContext) {
-      console.log(`👤 User context: ${userContext.userId} (${userContext.companyId})`);
-    }
-
     let deliveries;
     
     // If a specific date is provided, use the enhanced function with stats
     if (date && typeof date === 'string') {
-      console.log(`📊 Getting deliveries with stats for date: ${date}`);
-      
       // Require authentication for this endpoint
       if (!userContext) {
         res.status(401).json({
@@ -239,10 +232,10 @@ export const getAllDeliveries = async (req: Request, res: Response): Promise<voi
       
       try {
         // Get deliveries with sync using authenticated user context
-        // For the pending endpoint, we only want Booked status
-        deliveries = await deliveryService.getPendingDeliveriesForDate(date, limit, userContext, 'Booked');
+        // For the pending endpoint, get all statuses (not just Booked)
+        deliveries = await deliveryService.getPendingDeliveriesForDate(date, limit, userContext, undefined);
       } catch (error) {
-        console.error('❌ Failed to get deliveries:', error);
+        console.error('Failed to get deliveries:', error);
         res.status(500).json({
           success: false,
           error: error instanceof Error ? error.message : 'Failed to fetch deliveries'
@@ -265,7 +258,6 @@ export const getAllDeliveries = async (req: Request, res: Response): Promise<voi
       });
     } else {
       // Use the original logic for date ranges
-      console.log(`📊 Getting deliveries for date range: ${fromDate} to ${toDate}`);
       deliveries = await supabaseService.getDeliveries({
         fromDate: fromDate as string,
         toDate: toDate as string,
@@ -280,12 +272,7 @@ export const getAllDeliveries = async (req: Request, res: Response): Promise<voi
     }
 
   } catch (error) {
-    console.error('❌ Failed to get deliveries:', error);
-    console.error('❌ Error details:', {
-      message: error instanceof Error ? error.message : 'Unknown error',
-      stack: error instanceof Error ? error.stack : 'No stack trace',
-      userContext: userContext ? 'Present' : 'Missing'
-    });
+    console.error('Failed to get deliveries:', error);
     res.status(500).json({
       success: false,
       error: error instanceof Error ? error.message : 'Unknown error occurred',
@@ -398,8 +385,6 @@ export const getDashboardStats = async (req: Request, res: Response): Promise<vo
   const userContext = req.user;
 
   try {
-    console.log(`📊 Getting dashboard stats for date: ${date}`);
-    
     // Require authentication
     if (!userContext) {
       res.status(401).json({
@@ -412,14 +397,20 @@ export const getDashboardStats = async (req: Request, res: Response): Promise<vo
     // Use current date if none provided
     const targetDate = date as string || new Date().toISOString().split('T')[0];
     
-    // Get deliveries directly from QuickFlora API (no Supabase)
+    // Step 1: Get deliveries from QuickFlora API
     const allDeliveries = await deliveryService.syncDeliveriesFromQuickFlora({
       fromDate: targetDate,
       toDate: targetDate,
       status: undefined, // Get ALL statuses
       userContext: userContext,
-      returnData: true // Return data directly, skip Supabase sync
+      returnData: true // Return data directly
     });
+
+    // Step 2: Sync the fetched data to Supabase with company ID
+    let syncResult = null;
+    if (Array.isArray(allDeliveries) && allDeliveries.length > 0) {
+      syncResult = await supabaseService.syncWithQuickFlora(allDeliveries, userContext.companyId);
+    }
 
     // Handle the return type (can be void or any[])
     const deliveries = Array.isArray(allDeliveries) ? allDeliveries : [];
@@ -434,12 +425,19 @@ export const getDashboardStats = async (req: Request, res: Response): Promise<vo
       data: {
         stats: stats,
         date: targetDate,
-        timestamp: new Date().toISOString()
+        timestamp: new Date().toISOString(),
+        synced: syncResult !== null,
+        companyId: userContext.companyId,
+        syncDetails: syncResult ? {
+          added: syncResult.added,
+          updated: syncResult.updated,
+          failed: syncResult.failed
+        } : null
       }
     });
 
   } catch (error) {
-    console.error('❌ Failed to get dashboard stats:', error);
+    console.error('Failed to get dashboard stats:', error);
     res.status(500).json({
       success: false,
       error: error instanceof Error ? error.message : 'Failed to fetch dashboard stats'

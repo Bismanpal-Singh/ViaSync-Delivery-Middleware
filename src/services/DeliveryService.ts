@@ -81,10 +81,10 @@ export class DeliveryService {
   constructor(authService?: any) {
     // Initialize with environment variables
     const supabaseUrl = process.env.SUPABASE_URL;
-    const supabaseKey = process.env.SUPABASE_ANON_KEY;
+    const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY;
     
     if (!supabaseUrl || !supabaseKey) {
-      throw new Error('Missing required environment variables: SUPABASE_URL and SUPABASE_ANON_KEY');
+      throw new Error('Missing required environment variables: SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY or SUPABASE_ANON_KEY');
     }
     
     const config = {
@@ -120,24 +120,19 @@ export class DeliveryService {
     returnData?: boolean; // New parameter to return data directly
   }): Promise<void | any[]> {
     try {
-      console.log('🔄 Starting QuickFlora API sync...');
-      
       let token: string;
       let companyId: string;
       
       // Try user authentication first, fallback to token manager if needed
       if (params.userContext && this.authService && params.userContext.sessionId) {
         try {
-          console.log(`🔐 Using authenticated user context: ${params.userContext.userId} (${params.userContext.companyId})`);
           token = await this.authService.getValidBearerToken(params.userContext.sessionId);
           companyId = params.userContext.companyId;
         } catch (authError) {
-          console.warn('⚠️ User authentication failed, falling back to token manager:', authError);
           token = await this.quickFloraTokenManager.getValidToken();
           companyId = process.env.QUICKFLORA_COMPANY_ID || 'DEFAULT';
         }
       } else {
-        console.log('⚠️ No user context, using token manager');
         token = await this.quickFloraTokenManager.getValidToken();
         companyId = process.env.QUICKFLORA_COMPANY_ID || 'DEFAULT';
       }
@@ -145,11 +140,6 @@ export class DeliveryService {
       // Prepare the request payload for QuickFlora API
       // Use date-only format to avoid timezone confusion
       const targetDate = params.fromDate || new Date().toISOString().split('T')[0];
-      
-      console.log(`🔍 Debug: Date range for QuickFlora API:`);
-      console.log(`  Input date: ${targetDate}`);
-      console.log(`  API fromDate: ${targetDate}`);
-      console.log(`  API toDate: ${targetDate}`);
       
       const requestPayload = {
         companyID: companyId,
@@ -180,23 +170,19 @@ export class DeliveryService {
       );
 
       if (response.data && response.data.data) {
-        console.log(`📡 Fetched ${response.data.data.length} deliveries from QuickFlora API.`);
-        
         // If returnData is requested, return the data directly (skip Supabase sync)
         if (params.returnData) {
           return response.data.data;
         }
         
         // Otherwise, sync the data to Supabase with company ID (original behavior)
-        const syncResult = await this.supabaseService.syncWithQuickFlora(response.data.data, companyId);
-        console.log(`✅ Sync completed: ${syncResult.added} added, ${syncResult.updated} updated, ${syncResult.failed} failed.`);
+        await this.supabaseService.syncWithQuickFlora(response.data.data, companyId);
       } else {
-        console.log('📭 No deliveries found from QuickFlora API.');
         return params.returnData ? [] : undefined;
       }
 
     } catch (error) {
-      console.error('❌ Failed to sync from QuickFlora API:', error);
+      console.error('Failed to sync from QuickFlora API:', error);
       
       // If returnData is requested, throw the error (caller needs to handle it)
       if (params.returnData) {
