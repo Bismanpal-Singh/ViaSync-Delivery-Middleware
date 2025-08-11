@@ -8,6 +8,7 @@ import helmet from 'helmet';
 import morgan from 'morgan';
 import deliveryRoutes from './routes/deliveryRoutes';
 import routeRoutes from './routes/routeRoutes';
+import tripSheetRoutes from './routes/tripSheetRoutes';
 import authRoutes, { setAuthService } from './routes/authRoutes';
 import { authenticateUser, optionalAuth } from './middleware/authMiddleware';
 import { AuthService } from './services/AuthService';
@@ -58,7 +59,10 @@ app.get('/', (req, res) => {
 
       routes: '/api/routes',
       driverRoutes: '/api/routes/driver',
-      shopRoutes: '/api/routes/shop'
+      shopRoutes: '/api/routes/shop',
+      
+      tripSheets: '/api/trip-sheets',
+      generateTripSheet: '/api/trip-sheets/generate'
     },
     cors: {
       enabled: true,
@@ -86,6 +90,7 @@ app.use('/api/auth', authRoutes);
 // API routes with authentication
 app.use('/api/delivery', authenticateUser(authService), deliveryRoutes);
 app.use('/api/routes', authenticateUser(authService), routeRoutes);
+app.use('/api/trip-sheets', authenticateUser(authService), tripSheetRoutes);
 
 // Error handling middleware
 app.use((err: Error, req: express.Request, res: express.Response, next: express.NextFunction) => {

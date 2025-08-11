@@ -1,9 +1,6 @@
 -- Database Schema for ViaSync Delivery Dashboard
 -- Run this in your Supabase SQL editor
 
--- Enable Row Level Security (RLS)
-ALTER DATABASE postgres SET "app.jwt_secret" TO 'your-jwt-secret';
-
 -- Create comprehensive deliveries table for QuickFlora API data
 CREATE TABLE IF NOT EXISTS deliveries (
     id SERIAL PRIMARY KEY,
@@ -24,147 +21,92 @@ CREATE TABLE IF NOT EXISTS deliveries (
     destination_type VARCHAR(10),
     assigned BOOLEAN DEFAULT false,
     order_ship_date DATE,
-    ship_method_id VARCHAR(50),
-    trip_id VARCHAR(100),
-    not_delivered BOOLEAN DEFAULT false,
-    delivered BOOLEAN DEFAULT false,
-    order_type_id VARCHAR(50),
-    backordered BOOLEAN DEFAULT false,
-    shipped BOOLEAN DEFAULT false,
-    location_id VARCHAR(50),
-    transmit_to_delivery BOOLEAN DEFAULT false,
-    posted BOOLEAN DEFAULT false,
-    zone VARCHAR(50),
-    order_status VARCHAR(50), -- "Booked", "Invoiced", etc.
-    show_route VARCHAR(100),
-    address_verified VARCHAR(10),
-    order_reviewed BOOLEAN DEFAULT false,
+    order_status VARCHAR(50) DEFAULT 'Pending',
     
-    -- Multi-tenancy
-    company_id VARCHAR(100),
+    -- ViaSync Fields (NEW - for trip sheet linking)
+    trip_sheet_id VARCHAR(50), -- Links to trip_sheets.trip_sheet_id
+    stop_order INTEGER, -- Order in the route
+    vehicle_id INTEGER, -- Which vehicle is assigned
+    estimated_arrival_time VARCHAR(20), -- "08:30 AM"
+    actual_arrival_time VARCHAR(20),
+    delivery_notes TEXT,
     
-    -- Route Optimization Fields
-    route_optimization_id VARCHAR(100),
-    priority_start_time TIME,
-    priority_end_time TIME,
-    has_time_deadline BOOLEAN DEFAULT false,
-    deadline_priority_level INTEGER,
-    
-    -- System Fields
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-    
-    -- Indexes for performance
-    CONSTRAINT idx_deliveries_order_number UNIQUE (order_number),
-    CONSTRAINT idx_deliveries_company_id UNIQUE (company_id, order_number)
-);
-
--- Create orders table
-CREATE TABLE IF NOT EXISTS orders (
-    id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
-    order_id VARCHAR(50) UNIQUE NOT NULL,
-    customer_name VARCHAR(255) NOT NULL,
-    customer_email VARCHAR(255),
-    customer_phone VARCHAR(50),
-    delivery_address TEXT NOT NULL,
-    pickup_address TEXT NOT NULL,
-    order_date TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-    status VARCHAR(50) DEFAULT 'pending' CHECK (status IN ('pending', 'confirmed', 'processing', 'shipped', 'delivered', 'cancelled')),
-    total_amount DECIMAL(10,2) NOT NULL,
+    -- Metadata
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
--- Create order_items table
-CREATE TABLE IF NOT EXISTS order_items (
-    id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
-    order_id VARCHAR(50) NOT NULL REFERENCES orders(order_id) ON DELETE CASCADE,
-    product_name VARCHAR(255) NOT NULL,
-    quantity INTEGER NOT NULL CHECK (quantity > 0),
-    unit_price DECIMAL(10,2) NOT NULL,
-    total_price DECIMAL(10,2) NOT NULL,
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+-- Trip Sheets table (main container)
+CREATE TABLE IF NOT EXISTS trip_sheets (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    trip_sheet_id VARCHAR(50) UNIQUE NOT NULL, -- "10-6-605132" format
+    sheet_name VARCHAR(255),
+    delivery_date DATE NOT NULL,
+    depot_address TEXT NOT NULL,
+    driver_name VARCHAR(100),
+    vehicle_name VARCHAR(50), -- "Van-03", "Truck-02"
+    vehicle_capacity INTEGER,
+    total_stops INTEGER DEFAULT 0,
+    completed_stops INTEGER DEFAULT 0,
+    total_miles REAL,
+    time_range_start VARCHAR(20), -- "8:00 AM"
+    time_range_end VARCHAR(20), -- "3:00 PM"
+    status VARCHAR(50) DEFAULT 'active', -- 'active', 'in_progress', 'completed', 'cancelled'
+    optimization_result JSONB, -- Store the complete route optimization result
+    company_id VARCHAR(100) NOT NULL,
+    created_by VARCHAR(100) NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
--- Create delivery_quotes table to cache Uber quotes
-CREATE TABLE IF NOT EXISTS delivery_quotes (
-    id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
-    order_id VARCHAR(50) NOT NULL REFERENCES orders(order_id) ON DELETE CASCADE,
-    provider VARCHAR(50) NOT NULL DEFAULT 'uber',
-    quote_id VARCHAR(100) UNIQUE NOT NULL,
-    cost_amount DECIMAL(10,2) NOT NULL,
-    cost_currency VARCHAR(3) DEFAULT 'USD',
-    duration_seconds INTEGER NOT NULL,
-    distance_meters INTEGER NOT NULL,
-    pickup_eta_seconds INTEGER NOT NULL,
-    dropoff_eta_seconds INTEGER NOT NULL,
-    expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
+-- Trip Sheet Orders (links deliveries to trip sheets)
+CREATE TABLE IF NOT EXISTS trip_sheet_orders (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    trip_sheet_id VARCHAR(50) NOT NULL,
+    delivery_id INTEGER NOT NULL,
+    stop_order INTEGER NOT NULL,
+    vehicle_id INTEGER NOT NULL,
+    estimated_arrival_time VARCHAR(20),
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
 -- Create indexes for better performance
-CREATE INDEX IF NOT EXISTS idx_orders_order_date ON orders(order_date);
-CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status);
-CREATE INDEX IF NOT EXISTS idx_orders_customer_email ON orders(customer_email);
-CREATE INDEX IF NOT EXISTS idx_order_items_order_id ON order_items(order_id);
-CREATE INDEX IF NOT EXISTS idx_delivery_quotes_order_id ON delivery_quotes(order_id);
-CREATE INDEX IF NOT EXISTS idx_delivery_quotes_expires_at ON delivery_quotes(expires_at);
+CREATE INDEX IF NOT EXISTS idx_deliveries_trip_sheet_id ON deliveries(trip_sheet_id);
+CREATE INDEX IF NOT EXISTS idx_deliveries_order_ship_date ON deliveries(order_ship_date);
+CREATE INDEX IF NOT EXISTS idx_deliveries_order_status ON deliveries(order_status);
+CREATE INDEX IF NOT EXISTS idx_trip_sheets_company_id ON trip_sheets(company_id);
+CREATE INDEX IF NOT EXISTS idx_trip_sheets_delivery_date ON trip_sheets(delivery_date);
+CREATE INDEX IF NOT EXISTS idx_trip_sheets_status ON trip_sheets(status);
+CREATE INDEX IF NOT EXISTS idx_trip_sheet_orders_trip_sheet_id ON trip_sheet_orders(trip_sheet_id);
+CREATE INDEX IF NOT EXISTS idx_trip_sheet_orders_delivery_id ON trip_sheet_orders(delivery_id);
+
+-- Add foreign key constraints after tables are created
+ALTER TABLE deliveries 
+ADD CONSTRAINT fk_deliveries_trip_sheet 
+FOREIGN KEY (trip_sheet_id) REFERENCES trip_sheets(trip_sheet_id) ON DELETE SET NULL;
+
+ALTER TABLE trip_sheet_orders 
+ADD CONSTRAINT fk_trip_sheet_orders_trip_sheet 
+FOREIGN KEY (trip_sheet_id) REFERENCES trip_sheets(trip_sheet_id) ON DELETE CASCADE;
+
+ALTER TABLE trip_sheet_orders 
+ADD CONSTRAINT fk_trip_sheet_orders_delivery 
+FOREIGN KEY (delivery_id) REFERENCES deliveries(id) ON DELETE CASCADE;
 
 -- Enable Row Level Security
-ALTER TABLE orders ENABLE ROW LEVEL SECURITY;
-ALTER TABLE order_items ENABLE ROW LEVEL SECURITY;
-ALTER TABLE delivery_quotes ENABLE ROW LEVEL SECURITY;
+ALTER TABLE deliveries ENABLE ROW LEVEL SECURITY;
+ALTER TABLE trip_sheets ENABLE ROW LEVEL SECURITY;
+ALTER TABLE trip_sheet_orders ENABLE ROW LEVEL SECURITY;
 
--- Create RLS policies (adjust based on your authentication needs)
--- For now, allowing all operations - you should restrict this based on your needs
-CREATE POLICY "Allow all operations on orders" ON orders FOR ALL USING (true);
-CREATE POLICY "Allow all operations on order_items" ON order_items FOR ALL USING (true);
-CREATE POLICY "Allow all operations on delivery_quotes" ON delivery_quotes FOR ALL USING (true);
+-- Create RLS policies (basic example - adjust based on your auth needs)
+CREATE POLICY "Enable read access for all users" ON deliveries FOR SELECT USING (true);
+CREATE POLICY "Enable insert access for authenticated users" ON deliveries FOR INSERT WITH CHECK (true);
+CREATE POLICY "Enable update access for authenticated users" ON deliveries FOR UPDATE USING (true);
 
--- Create function to update updated_at timestamp
-CREATE OR REPLACE FUNCTION update_updated_at_column()
-RETURNS TRIGGER AS $$
-BEGIN
-    NEW.updated_at = NOW();
-    RETURN NEW;
-END;
-$$ language 'plpgsql';
+CREATE POLICY "Enable read access for all users" ON trip_sheets FOR SELECT USING (true);
+CREATE POLICY "Enable insert access for authenticated users" ON trip_sheets FOR INSERT WITH CHECK (true);
+CREATE POLICY "Enable update access for authenticated users" ON trip_sheets FOR UPDATE USING (true);
 
--- Create trigger to automatically update updated_at
-CREATE TRIGGER update_orders_updated_at BEFORE UPDATE ON orders
-    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
-
--- Insert sample data for testing
-INSERT INTO orders (order_id, customer_name, customer_email, delivery_address, pickup_address, total_amount, status) VALUES
-('ORDER001', 'John Smith', 'john@example.com', '123 Main St, San Francisco, CA 94102', '456 Flower Shop, San Francisco, CA 94103', 48.00, 'pending'),
-('ORDER002', 'Sarah Johnson', 'sarah@example.com', '789 Oak Ave, San Francisco, CA 94105', '456 Flower Shop, San Francisco, CA 94103', 39.50, 'confirmed'),
-('ORDER003', 'Mike Davis', 'mike@example.com', '321 Pine St, San Francisco, CA 94104', '456 Flower Shop, San Francisco, CA 94103', 33.50, 'pending')
-ON CONFLICT (order_id) DO NOTHING;
-
-INSERT INTO order_items (order_id, product_name, quantity, unit_price, total_price) VALUES
-('ORDER001', 'Red Roses', 12, 2.50, 30.00),
-('ORDER001', 'White Lilies', 6, 3.00, 18.00),
-('ORDER002', 'Mixed Bouquet', 1, 35.00, 35.00),
-('ORDER002', 'Baby Breath', 3, 1.50, 4.50),
-('ORDER003', 'Sunflowers', 8, 2.00, 16.00),
-('ORDER003', 'Tulips', 10, 1.75, 17.50)
-ON CONFLICT DO NOTHING;
-
--- Create view for orders with items
-CREATE OR REPLACE VIEW orders_with_items AS
-SELECT 
-    o.*,
-    json_agg(
-        json_build_object(
-            'id', oi.id,
-            'product_name', oi.product_name,
-            'quantity', oi.quantity,
-            'unit_price', oi.unit_price,
-            'total_price', oi.total_price
-        )
-    ) as items
-FROM orders o
-LEFT JOIN order_items oi ON o.order_id = oi.order_id
-GROUP BY o.id, o.order_id, o.customer_name, o.customer_email, o.customer_phone, 
-         o.delivery_address, o.pickup_address, o.order_date, o.status, 
-         o.total_amount, o.created_at, o.updated_at; 
+CREATE POLICY "Enable read access for all users" ON trip_sheet_orders FOR SELECT USING (true);
+CREATE POLICY "Enable insert access for authenticated users" ON trip_sheet_orders FOR INSERT WITH CHECK (true);
+CREATE POLICY "Enable update access for authenticated users" ON trip_sheet_orders FOR UPDATE USING (true); 
