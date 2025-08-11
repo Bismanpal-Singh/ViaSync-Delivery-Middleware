@@ -284,43 +284,10 @@ export class SupabaseService {
 
   // Method to get shop location from company_locations table
   async getShopLocation(): Promise<string> {
-    try {
-      // Check if we have a cached location that's still valid
-      if (this.cachedShopLocation && Date.now() < this.cacheExpiry) {
-        return this.formatShopAddress(this.cachedShopLocation);
-      }
-
-      console.log('🏪 Fetching shop location from company_locations...');
-      
-      const { data, error } = await this.supabase
-        .from('company_locations')
-        .select('*')
-        .eq('is_active', true)
-        .order('created_at', { ascending: false })
-        .limit(1)
-        .single();
-
-      if (error) {
-        if (error.code === 'PGRST116') {
-          console.warn('⚠️ No active company location found, using fallback address');
-          return process.env.SHOP_ADDRESS || '456 Flower Shop, San Francisco, CA 94103';
-        }
-        console.error('❌ Supabase query error:', error);
-        throw new Error(`Failed to fetch shop location: ${error.message}`);
-      }
-
-      // Cache the location
-      this.cachedShopLocation = data;
-      this.cacheExpiry = Date.now() + this.CACHE_DURATION;
-
-      const formattedAddress = this.formatShopAddress(data);
-      console.log(`✅ Retrieved shop location: ${formattedAddress}`);
-      return formattedAddress;
-    } catch (error) {
-      console.error('❌ Failed to fetch shop location:', error);
-      // Return fallback address if database query fails
-      return process.env.SHOP_ADDRESS || '456 Flower Shop, San Francisco, CA 94103';
-    }
+    // Hardcoded shop address for GTS Flowers Inc
+    const hardcodedAddress = 'GTS Flowers Inc, 8002 Concord Hwy, Monroe, NC 28110';
+    console.log(`✅ Using hardcoded shop location: ${hardcodedAddress}`);
+    return hardcodedAddress;
   }
 
   // Method to get all company locations (useful for debugging)
