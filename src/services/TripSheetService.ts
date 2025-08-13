@@ -2,30 +2,23 @@ import { createClient, SupabaseClient } from '@supabase/supabase-js';
 
 export interface TripSheet {
   id: string;
-  driver: string;
-  vehicle: string;
+  tripSheetName: string;
+  driverName: string;
+  vehicleName: string;
+  deliveryDate: string;
   startTime: string;
-  estimatedEnd: string;
+  depotAddress: string;
   totalStops: number;
   completedStops: number;
-  currentMileage: number;
-  dispatcher: string;
-  routeDate: string;
-  mileage: string;
+  status: string;
   orders: any[];
+  optimizationResult: {
+    routes: any[];
+    totalDistance: number;
+    totalTime: number;
+  };
   createdAt: string;
   updatedAt: string;
-}
-
-export interface TripSheetOrder {
-  id: string;
-  tripSheetId: string;
-  deliveryId: number;
-  stopOrder: number;
-  vehicleId: number;
-  estimatedArrivalTime: string;
-  estimatedDepartureTime: string;
-  delivery?: any; // Linked delivery data
 }
 
 export interface DeliveryResult {
@@ -53,11 +46,7 @@ export class TripSheetService {
         .select('id')
         .limit(1);
       
-      if (error) {
-        return false;
-      }
-      
-      return true;
+      return !error;
     } catch (err) {
       return false;
     }
@@ -91,12 +80,9 @@ export class TripSheetService {
     const tripSheetId = this.generateTripSheetId();
     const sheetName = params.sheetName || `Trip Sheet ${tripSheetId}`;
     
-    // Calculate time range
     const startTime = params.startTime || '08:00';
     const endTime = this.calculateEndTime(startTime, params.optimizationResult.totalTime);
 
-    // Create trip sheet
-    
     const tripSheetData = {
       id: tripSheetId,
       driver: params.driverName || 'Unassigned',
@@ -105,7 +91,7 @@ export class TripSheetService {
       estimated_end: endTime,
       total_stops: this.countTotalStops(params.optimizationResult.routes),
       completed_stops: 0,
-      current_mileage: Math.round(params.optimizationResult.totalDistance / 1609.34), // Convert meters to miles
+      current_mileage: Math.round(params.optimizationResult.totalDistance / 1609.34),
       dispatcher: params.createdBy,
       route_date: params.deliveryDate,
       mileage: `${Math.round(params.optimizationResult.totalDistance / 1609.34)} miles`,
@@ -126,79 +112,32 @@ export class TripSheetService {
   }
 
   /**
-   * Get trip sheet by ID with delivery details from existing deliveries table
+   * Get trip sheet by ID
    */
   async getTripSheet(tripSheetId: string): Promise<TripSheet | null> {
     const { data: tripSheet, error: sheetError } = await this.supabase
       .from('trip_sheets')
       .select('*')
-      .eq('trip_sheet_id', tripSheetId)
+      .eq('id', tripSheetId)
       .single();
 
     if (sheetError || !tripSheet) return null;
 
-    // Get trip sheet orders with delivery details
-    const { data: orders, error: ordersError } = await this.supabase
-      .from('trip_sheet_orders')
-      .select(`
-        *,
-        deliveries (
-          id,
-          shipping_name,
-          order_number,
-          shipping_address1,
-          shipping_address2,
-          shipping_city,
-          shipping_state,
-          shipping_zip,
-          order_status,
-          priority,
-          assigned_to
-        )
-      `)
-      .eq('trip_sheet_id', tripSheet.id)
-      .order('stop_order');
-
-    if (ordersError) throw new Error(`Failed to get orders: ${ordersError.message}`);
-
-    return {
-      ...tripSheet,
-      orders: orders || []
-    };
+    return this.formatTripSheet(tripSheet);
   }
 
   /**
-   * Get all active trip sheets for a company
+   * Get all active trip sheets
    */
   async getActiveTripSheets(companyId: string): Promise<TripSheet[]> {
     const { data: tripSheets, error } = await this.supabase
       .from('trip_sheets')
-      .select(`
-        *,
-        trip_sheet_orders (
-          delivery_id,
-          deliveries (order_status)
-        )
-      `)
-      .eq('company_id', companyId)
-      .eq('status', 'active')
+      .select('*')
       .order('created_at', { ascending: false });
 
     if (error) throw new Error(`Failed to get trip sheets: ${error.message}`);
 
-    // Calculate completed stops for each trip sheet
-    return (tripSheets || []).map(tripSheet => {
-      const orders = tripSheet.trip_sheet_orders || [];
-      const completedStops = orders.filter((order: any) => 
-        order.deliveries?.order_status === 'delivered'
-      ).length;
-
-      return {
-        ...tripSheet,
-        completed_stops: completedStops,
-        total_stops: orders.length
-      };
-    });
+    return (tripSheets || []).map(tripSheet => this.formatTripSheet(tripSheet));
   }
 
   /**
@@ -213,45 +152,77 @@ export class TripSheetService {
     let query = this.supabase
       .from('trip_sheets')
       .select('*')
-      .eq('company_id', params.companyId)
-      .gte('delivery_date', params.startDate)
-      .lte('delivery_date', params.endDate)
-      .order('delivery_date', { ascending: false });
-
-    if (params.status) {
-      query = query.eq('status', params.status);
-    }
+      .gte('route_date', params.startDate)
+      .lte('route_date', params.endDate)
+      .order('route_date', { ascending: false });
 
     const { data, error } = await query;
     if (error) throw new Error(`Failed to get trip sheets: ${error.message}`);
 
-    return data || [];
+    return (data || []).map(tripSheet => this.formatTripSheet(tripSheet));
   }
 
-  private async createTripSheetOrders(tripSheetId: string, routes: any[]): Promise<void> {
-    let stopOrder = 1;
+  /**
+   * Get trip sheets by specific date
+   */
+  async getTripSheetsByDate(params: {
+    companyId: string;
+    date: string;
+  }): Promise<TripSheet[]> {
+    const { data: tripSheets, error } = await this.supabase
+      .from('trip_sheets')
+      .select('*')
+      .eq('route_date', params.date)
+      .order('created_at', { ascending: false });
 
-    for (const route of routes) {
-      for (const stop of route.stops) {
-        if (stop.locationId !== 'depot') {
-          // Create trip sheet order
-          const { error: orderError } = await this.supabase
-            .from('trip_sheet_orders')
-            .insert({
-              trip_sheet_id: tripSheetId,
-              delivery_id: parseInt(stop.locationId),
-              stop_order: stopOrder++,
-              vehicle_id: route.vehicleId,
-              estimated_arrival_time: stop.arrivalTime,
-              estimated_departure_time: stop.departureTime
-            });
-
-          if (orderError) throw new Error(`Failed to create trip sheet order: ${orderError.message}`);
-        }
-      }
+    if (error) {
+      throw new Error(`Failed to get trip sheets: ${error.message}`);
     }
 
+    return (tripSheets || []).map(tripSheet => this.formatTripSheet(tripSheet));
+  }
 
+  /**
+   * Format trip sheet data for frontend
+   */
+  private formatTripSheet(tripSheet: any): TripSheet {
+    const orders = tripSheet.orders || [];
+    const completedStops = tripSheet.completed_stops || 0;
+
+    const formattedOrders = orders.map((order: any, index: number) => ({
+      id: order.orderId || `order-${index}`,
+      customer: order.customerName || 'Unknown',
+      address: order.address || 'Address not available',
+      city: order.city || '',
+      zip: order.zip || '',
+      status: order.status || 'pending',
+      priority: order.priority || 'standard',
+      orderNumber: order.orderNumber || `ORDER-${index}`,
+      stopOrder: order.stopOrder || index + 1,
+      estimatedArrivalTime: order.estimatedArrival || '',
+      estimatedDepartureTime: order.estimatedDeparture || ''
+    }));
+
+    return {
+      id: tripSheet.id,
+      tripSheetName: `Trip Sheet ${tripSheet.id}`,
+      driverName: tripSheet.driver || 'Unassigned',
+      vehicleName: tripSheet.vehicle || 'Unassigned',
+      deliveryDate: tripSheet.route_date,
+      startTime: tripSheet.start_time || '08:00',
+      depotAddress: 'GTS Flowers Inc, 8002 Concord Hwy, Monroe, NC 28110',
+      totalStops: tripSheet.total_stops || orders.length,
+      completedStops: completedStops,
+      status: 'active',
+      orders: formattedOrders,
+      optimizationResult: {
+        routes: tripSheet.orders || [],
+        totalDistance: tripSheet.current_mileage ? tripSheet.current_mileage * 1609.34 : 0,
+        totalTime: this.calculateTotalTime(tripSheet.start_time, tripSheet.estimated_end)
+      },
+      createdAt: tripSheet.created_at,
+      updatedAt: tripSheet.updated_at
+    };
   }
 
   private countTotalStops(routes: any[]): number {
@@ -269,16 +240,12 @@ export class TripSheetService {
     return `${endHours.toString().padStart(2, '0')}:${endMins.toString().padStart(2, '0')}`;
   }
 
-  /**
-   * Format route orders for trip sheet storage
-   */
-    private formatOrdersForTripSheet(routes: any[]): any[] {
+  private formatOrdersForTripSheet(routes: any[]): any[] {
     const orders: any[] = [];
 
     routes.forEach((route, routeIndex) => {
       if (route.stops && Array.isArray(route.stops)) {
         route.stops.forEach((stop: any, stopIndex: number) => {
-          // Check if this is a delivery stop (not depot)
           if (stop.locationId && stop.locationId !== 'depot') {
             orders.push({
               orderId: stop.locationId,
@@ -296,5 +263,17 @@ export class TripSheetService {
     });
 
     return orders;
+  }
+
+  private calculateTotalTime(startTime: string, endTime: string): number {
+    if (!startTime || !endTime) return 0;
+    
+    const [startHours, startMinutes] = startTime.split(':').map(Number);
+    const [endHours, endMinutes] = endTime.split(':').map(Number);
+    
+    const startTotalMinutes = startHours * 60 + startMinutes;
+    const endTotalMinutes = endHours * 60 + endMinutes;
+    
+    return endTotalMinutes - startTotalMinutes;
   }
 }

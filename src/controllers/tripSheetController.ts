@@ -20,18 +20,16 @@ export const generateTripSheet = async (req: Request, res: Response): Promise<vo
     return;
   }
 
-      try {
-      // Test table access first
-      const tableAccessible = await tripSheetService.testTableAccess();
-      if (!tableAccessible) {
-        res.status(500).json({
-          success: false,
-          error: 'Trip sheets table is not accessible. Please check database setup.'
-        });
-        return;
-      }
+  try {
+    const tableAccessible = await tripSheetService.testTableAccess();
+    if (!tableAccessible) {
+      res.status(500).json({
+        success: false,
+        error: 'Trip sheets table is not accessible. Please check database setup.'
+      });
+      return;
+    }
 
-    // Use the provided optimization result instead of re-running optimization
     if (!optimizationResult) {
       res.status(400).json({
         success: false,
@@ -40,7 +38,6 @@ export const generateTripSheet = async (req: Request, res: Response): Promise<vo
       return;
     }
 
-    // Then generate trip sheet
     const tripSheet = await tripSheetService.generateTripSheet({
       sheetName,
       deliveryDate,
@@ -60,7 +57,6 @@ export const generateTripSheet = async (req: Request, res: Response): Promise<vo
     });
 
   } catch (error) {
-    console.error('❌ Failed to generate trip sheet:', error);
     res.status(500).json({
       success: false,
       error: error instanceof Error ? error.message : 'Unknown error occurred',
@@ -95,9 +91,6 @@ export const getTripSheet = async (req: Request, res: Response): Promise<void> =
       return;
     }
 
-    // Note: Company access verification removed since new schema doesn't have company_id
-    // You may want to add this back based on your business logic
-
     res.json({
       success: true,
       data: tripSheet,
@@ -105,7 +98,6 @@ export const getTripSheet = async (req: Request, res: Response): Promise<void> =
     });
 
   } catch (error) {
-    console.error('❌ Failed to get trip sheet:', error);
     res.status(500).json({
       success: false,
       error: error instanceof Error ? error.message : 'Unknown error occurred',
@@ -116,8 +108,10 @@ export const getTripSheet = async (req: Request, res: Response): Promise<void> =
 
 /**
  * Get all active trip sheets for a company
+ * Now supports date filtering via query parameter
  */
 export const getActiveTripSheets = async (req: Request, res: Response): Promise<void> => {
+  const { date } = req.query;
   const userContext = req.user;
 
   if (!userContext) {
@@ -129,20 +123,44 @@ export const getActiveTripSheets = async (req: Request, res: Response): Promise<
   }
 
   try {
-    const tripSheets = await tripSheetService.getActiveTripSheets(userContext!.companyId);
+    // Validate date format if provided
+    if (date && typeof date === 'string') {
+      const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
+      if (!dateRegex.test(date)) {
+        res.status(400).json({
+          success: false,
+          error: 'Invalid date format. Use YYYY-MM-DD format (e.g., 2025-08-11)'
+        });
+        return;
+      }
+    }
+
+    let tripSheets;
+    
+    if (date) {
+      tripSheets = await tripSheetService.getTripSheetsByDate({
+        companyId: userContext!.companyId,
+        date: date as string
+      });
+    } else {
+      tripSheets = await tripSheetService.getActiveTripSheets(userContext!.companyId);
+    }
 
     res.json({
       success: true,
-      data: tripSheets,
-      message: `Retrieved ${tripSheets.length} active trip sheets`
+      data: {
+        tripSheets: tripSheets
+      },
+      message: date 
+        ? `Retrieved ${tripSheets.length} trip sheets for ${date}`
+        : `Retrieved ${tripSheets.length} active trip sheets`
     });
 
   } catch (error) {
-    console.error('❌ Failed to get active trip sheets:', error);
     res.status(500).json({
       success: false,
       error: error instanceof Error ? error.message : 'Unknown error occurred',
-      message: 'Failed to get active trip sheets'
+      message: 'Failed to get trip sheets'
     });
   }
 };
@@ -177,7 +195,6 @@ export const getTripSheetsByDateRange = async (req: Request, res: Response): Pro
     });
 
   } catch (error) {
-    console.error('❌ Failed to get trip sheets by date range:', error);
     res.status(500).json({
       success: false,
       error: error instanceof Error ? error.message : 'Unknown error occurred',
