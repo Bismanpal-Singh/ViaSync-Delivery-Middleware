@@ -341,7 +341,7 @@ export class DeliveryService {
     deliveries: DeliveryLocation[],
     maxBatchSize: number = 24 // 24 deliveries + 1 depot = 25 total (Routes API limit)
   ): Promise<DeliveryLocation[][]> {
-          console.log(`Clustering ${deliveries.length} deliveries into batches of ${maxBatchSize}`);
+          // Clustering deliveries into batches
 
     // Step 1: Geocode all addresses (including depot) to get coordinates
     const allAddresses = [depotAddress, ...deliveries.map(d => d.address)];
@@ -434,14 +434,7 @@ export class DeliveryService {
       clusters.push(currentCluster);
     }
 
-          console.log(`Created ${clusters.length} clusters`);
-    clusters.forEach((cluster, index) => {
-      const totalDistance = cluster.reduce((sum, delivery) => {
-        const deliveryData = distancesFromDepot.find(d => d.delivery.id === delivery.id);
-        return sum + (deliveryData?.distanceFromDepot || 0);
-      }, 0);
-      console.log(`   Cluster ${index + 1}: ${cluster.length} deliveries`);
-    });
+          // Created clusters
 
     return clusters;
   }
@@ -455,7 +448,7 @@ export class DeliveryService {
     deliveries: DeliveryLocation[],
     maxBatchSize: number = 24 // 24 deliveries + 1 depot = 25 total (Routes API limit)
   ): Promise<DeliveryLocation[][]> {
-    console.log(`🗺️ Creating optimal delivery clusters for pagination (${deliveries.length} deliveries)`);
+    // Creating optimal delivery clusters for pagination
     
     // Use the same clustering logic but return all clusters
     const clusters = await this.clusterDeliveriesForOptimization(
@@ -464,10 +457,7 @@ export class DeliveryService {
       maxBatchSize
     );
 
-    console.log(`✅ Created ${clusters.length} optimal clusters for pagination`);
-    clusters.forEach((cluster, index) => {
-      console.log(`   Cluster ${index + 1}: ${cluster.length} deliveries`);
-    });
+    // Created optimal clusters for pagination
 
     return clusters;
   }
@@ -522,7 +512,7 @@ export class DeliveryService {
     const serviceTimeMinutes = request.serviceTimeMinutes || 10;
     const serviceTimeSeconds = serviceTimeMinutes * 60;
     try {
-      console.log(`Optimizing ${request.deliveries.length} deliveries with ${request.vehicleCapacities.length} vehicles`);
+      // Optimizing deliveries
 
       // Step 1: Geocode all addresses
       let depotAddressStr: string;
@@ -542,7 +532,7 @@ export class DeliveryService {
 
       // Override depot time window if custom start time is provided
       if (customStartTime) {
-        console.log(`⏰ Using custom start time: ${customStartTime.date} at ${customStartTime.time}`);
+        // Using custom start time
         depotTimeWindow = [customStartTime.minutesFromMidnight, 1440]; // From custom start time to end of day
       }
 
@@ -552,11 +542,7 @@ export class DeliveryService {
         allAddresses.map(addr => this.geocodingService.geocodeAddress(addr))
       );
 
-      // Debug: Print geocoded coordinates
-      console.log('🗺️ Geocoded addresses:');
-      geocodedAddresses.forEach((coords, idx) => {
-        console.log(`   [${idx}] ${allAddresses[idx]} =>`, coords);
-      });
+      // Geocoded addresses
 
       // Check if all addresses were geocoded successfully
       const failedGeocoding = geocodedAddresses.findIndex(coords => !coords);
@@ -612,7 +598,7 @@ export class DeliveryService {
         demands: demands
       };
       // Log essential information only
-      console.log(`Optimizing ${mergedDeliveries.length} deliveries with ${request.vehicleCapacities.length} vehicles`);
+      // Optimizing merged deliveries
       // Step 5: Solve with OR-Tools
       const solverResult = await this.orToolsService.solveVRPTW(solverData);
       if (solverResult.error) {
@@ -739,7 +725,7 @@ export class DeliveryService {
           routes: result.routes
         });
 
-        console.log(`Route stored: ${routeId}`);
+        // Route stored
       } catch (storageError) {
         console.warn('Failed to store route:', storageError);
         // Don't fail the optimization if storage fails
@@ -810,14 +796,14 @@ export class DeliveryService {
     };
   }): Promise<DeliveryResult> {
     try {
-      console.log(`Optimizing routes from database with ${(params.vehicleCapacities || [50]).length} vehicles`);
+      // Optimizing routes from database
 
       // Step 1: Get real deliveries from Supabase using the same filtering logic as GET /api/delivery/pending
       // If a specific date is provided, use the same logic as the pending endpoint
       let deliveries: any[];
       if (params.fromDate && params.toDate && params.fromDate === params.toDate) {
         // Single date - use the same logic as pending endpoint
-        console.log(`📅 Using single date filtering (same as GET /api/delivery/pending): ${params.fromDate}`);
+        // Using single date filtering
         
         // Require user context for single date filtering
         if (!params.userContext) {
@@ -827,7 +813,7 @@ export class DeliveryService {
         deliveries = await this.getPendingDeliveriesForDate(params.fromDate, params.limit || 200, params.userContext);
       } else {
         // Date range or other criteria - use the original logic but with consistent status
-        console.log(`📅 Using date range filtering: ${params.fromDate} to ${params.toDate}`);
+        // Using date range filtering
         
         // Sync with user context if available
         if (params.userContext) {
@@ -855,7 +841,7 @@ export class DeliveryService {
         throw new Error('No deliveries found for the specified criteria');
       }
 
-      console.log(`Found ${deliveries.length} deliveries to optimize`);
+      // Found deliveries to optimize
 
       // Step 2: Get depot address (shop location)
       const shopLocation = await this.supabaseService.getShopLocation();
@@ -911,7 +897,7 @@ export class DeliveryService {
       // Step 6: Handle clustering internally based on delivery count
       let result: DeliveryResult;
       if (deliveryLocations.length > 24) {
-        console.log(`Large delivery set (${deliveryLocations.length} deliveries). Using clustering...`);
+        // Large delivery set - using clustering
         // Get all optimal clusters
         const allClusters = await this.getOptimalDeliveryClusters(
           depotAddress,
@@ -922,7 +908,7 @@ export class DeliveryService {
         const clusterIndex = Math.floor((params.offset || 0) / 24);
         const targetCluster = allClusters[clusterIndex];
         if (targetCluster) {
-          console.log(`Optimizing cluster ${clusterIndex + 1}/${allClusters.length} (${targetCluster.length} deliveries)`);
+          // Optimizing cluster
           // Create optimization request for this specific cluster
           const clusterRequest: DeliveryRequest = {
             depotAddress: {
@@ -945,7 +931,7 @@ export class DeliveryService {
         }
       } else {
         // Use direct optimization for smaller delivery sets
-        console.log(`Small delivery set (${deliveryLocations.length} deliveries). Using direct optimization...`);
+        // Small delivery set - using direct optimization
         result = await this.optimizeDeliveryRoutes(optimizationRequest, customStartTime);
       }
 
@@ -972,7 +958,7 @@ export class DeliveryService {
           }
         }
       } catch (err) {
-        console.warn('⚠️ Failed to get traffic-aware ETA:', err);
+        console.warn('Failed to get traffic-aware ETA:', err);
       }
 
       // Automatically store the route with more specific details
@@ -999,12 +985,9 @@ export class DeliveryService {
           routes: result.routes
         });
 
-        console.log(`💾 Database route stored with ID: ${routeId}`);
-        if (customStartTime) {
-          console.log(`⏰ Route uses custom start time: ${customStartTime.date} at ${customStartTime.time}`);
-        }
+        // Database route stored
       } catch (storageError) {
-        console.warn('⚠️ Failed to store database route:', storageError);
+        console.warn('Failed to store database route:', storageError);
         // Don't fail the optimization if storage fails
       }
 

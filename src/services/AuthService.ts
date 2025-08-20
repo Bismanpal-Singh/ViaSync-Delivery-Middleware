@@ -59,8 +59,6 @@ export class AuthService {
     message: string;
   }> {
     try {
-      console.log(`🔐 Attempting login for employee: ${credentials.employeeID} at company: ${credentials.companyID}`);
-
       // Call QuickFlora login API
       const response = await axios.post(
         'https://quickflora-new.com/QuickFloraCoreAPI/Account/login',
@@ -81,12 +79,6 @@ export class AuthService {
       // Decode token to get user information
       const decodedToken = jwtDecode<DecodedToken>(token);
       const expiryTimestamp = decodedToken.exp * 1000;
-
-      console.log('🔍 Token Analysis:');
-      console.log(`📅 Token expiry (Unix): ${decodedToken.exp}`);
-      console.log(`📅 Token expiry (Date): ${new Date(expiryTimestamp).toLocaleString()}`);
-      console.log(`⏰ Current time: ${new Date().toLocaleString()}`);
-      console.log(`⏱️ Time until expiry: ${Math.round((expiryTimestamp - Date.now()) / 1000 / 60)} minutes`);
 
       // Create session
       const sessionId = this.generateSessionId();
@@ -110,9 +102,6 @@ export class AuthService {
       // Store session
       this.sessions.set(sessionId, session);
 
-      console.log(`✅ Login successful for ${credentials.employeeID} at ${credentials.companyID}`);
-      console.log(`📅 Session expires at: ${session.tokenExpiry.toLocaleString()}`);
-
       return {
         sessionId,
         userId: credentials.employeeID,
@@ -120,7 +109,7 @@ export class AuthService {
         message: 'Login successful',
       };
     } catch (error) {
-      console.error('❌ Login failed:', error);
+      console.error('Login failed:', error);
       if (axios.isAxiosError(error) && error.response) {
         console.error('Error Response:', error.response.data);
         throw new Error(`Login failed: ${error.response.data.message || 'Invalid credentials'}`);
@@ -138,19 +127,11 @@ export class AuthService {
     const session = this.sessions.get(sessionId);
     
     if (!session) {
-      console.log(`❌ Session not found: ${sessionId}`);
       return null;
     }
 
-    console.log(`🔍 Checking session: ${sessionId}`);
-    console.log(`📅 Last activity: ${session.lastActivity.toLocaleString()}`);
-    console.log(`⏰ Current time: ${new Date().toLocaleString()}`);
-    console.log(`⏱️ Time since last activity: ${Math.round((Date.now() - session.lastActivity.getTime()) / 1000 / 60)} minutes`);
-    console.log(`⏱️ Session timeout: ${Math.round(this.SESSION_TIMEOUT / 1000 / 60)} minutes`);
-
     // Check if session has expired
     if (Date.now() > session.lastActivity.getTime() + this.SESSION_TIMEOUT) {
-      console.log(`❌ Session expired, deleting: ${sessionId}`);
       this.sessions.delete(sessionId);
       return null;
     }
@@ -158,7 +139,6 @@ export class AuthService {
     // Update last activity
     session.lastActivity = new Date();
     this.sessions.set(sessionId, session);
-    console.log(`✅ Session valid, updated last activity: ${sessionId}`);
 
     return session;
   }
@@ -175,18 +155,12 @@ export class AuthService {
       throw new Error('Invalid or expired session');
     }
 
-    console.log(`🔍 Validating session: ${sessionId}`);
-    console.log(`📅 Token expires at: ${session.tokenExpiry.toLocaleString()}`);
-    console.log(`⏰ Current time: ${new Date().toLocaleString()}`);
-
     // Check if token is actually expired (not just expiring soon)
     const timeUntilExpiry = session.tokenExpiry.getTime() - Date.now();
     const isExpired = timeUntilExpiry <= 0;
 
-    console.log(`⏱️ Time until expiry: ${Math.round(timeUntilExpiry / 1000 / 60)} minutes`);
-
     if (isExpired) {
-      console.log('🔄 Token has expired, attempting silent refresh...');
+      // Token has expired, attempting silent refresh
       
       try {
         const refreshResult = await this.refreshSessionSilently(sessionId);
@@ -194,22 +168,15 @@ export class AuthService {
           // Get the new session
           const newSession = this.getSession(refreshResult.newSessionId);
           if (newSession) {
-            console.log('✅ Session refreshed successfully');
             return newSession.bearerToken;
           }
         }
       } catch (refreshError) {
-        console.warn('⚠️ Silent refresh failed:', refreshError);
+        console.warn('Silent refresh failed:', refreshError);
       }
       
-      // If refresh failed, be more lenient - don't immediately check QuickFlora status
-      console.log('⚠️ Refresh failed, but continuing with current token for now');
+      // If refresh failed, continue with current token for now
       // Don't delete session immediately - let it continue working
-    } else if (timeUntilExpiry <= this.TOKEN_BUFFER) {
-      // Token is expiring soon but not expired yet - just log warning
-      console.log(`⚠️ Token will expire in ${Math.round(timeUntilExpiry / 1000 / 60)} minutes`);
-    } else {
-      console.log('✅ Token is valid');
     }
 
     // Update last activity
@@ -245,7 +212,7 @@ export class AuthService {
       // If we get a successful response, session is still valid
       return response.status === 200;
     } catch (error) {
-      console.log('❌ QuickFlora session expired or invalid');
+      // QuickFlora session expired or invalid
       return false;
     }
   }
@@ -270,7 +237,7 @@ export class AuthService {
     }
 
     try {
-      console.log('🔄 Performing silent session refresh...');
+      // Performing silent session refresh
       
       // Call QuickFlora login API with stored credentials
       const response = await axios.post(
@@ -313,16 +280,13 @@ export class AuthService {
       this.sessions.delete(sessionId);
       this.sessions.set(newSessionId, newSession);
 
-      console.log('✅ Session refreshed successfully');
-      console.log(`📅 New session expires at: ${newSession.tokenExpiry.toLocaleString()}`);
-
       return {
         success: true,
         newSessionId: newSessionId
       };
 
     } catch (error) {
-      console.error('❌ Silent session refresh failed:', error);
+      console.error('Silent session refresh failed:', error);
       
       // Remove the failed session
       this.sessions.delete(sessionId);
@@ -358,17 +322,13 @@ export class AuthService {
         }
       );
 
-      console.log('✅ Logged out from QuickFlora API');
+      // Logged out from QuickFlora API
     } catch (error) {
-      console.log('⚠️ QuickFlora logout failed, but removing local session anyway');
+      // QuickFlora logout failed, but removing local session anyway
     }
 
     // Remove local session regardless of QuickFlora response
-    const removed = this.sessions.delete(sessionId);
-    if (removed) {
-      console.log(`👋 User logged out, session ${sessionId} removed`);
-    }
-    return removed;
+    return this.sessions.delete(sessionId);
   }
 
   /**
@@ -376,11 +336,7 @@ export class AuthService {
    * @param sessionId Session identifier
    */
   public logout(sessionId: string): boolean {
-    const removed = this.sessions.delete(sessionId);
-    if (removed) {
-      console.log(`👋 User logged out, session ${sessionId} removed`);
-    }
-    return removed;
+    return this.sessions.delete(sessionId);
   }
 
   /**
@@ -405,9 +361,7 @@ export class AuthService {
       }
     }
 
-    if (cleanedCount > 0) {
-      console.log(`🧹 Cleaned up ${cleanedCount} expired sessions`);
-    }
+    // Cleaned up expired sessions if any
   }
 
   /**

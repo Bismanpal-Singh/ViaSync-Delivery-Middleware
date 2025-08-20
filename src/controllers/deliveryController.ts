@@ -50,7 +50,7 @@ export const optimizeDelivery = async (req: Request, res: Response): Promise<voi
   }
 
   try {
-    console.log(`Optimizing ${deliveries.length} deliveries with ${vehicleCapacities.length} vehicles`);
+    // Optimizing deliveries
 
     const result = await deliveryService.optimizeDeliveryRoutes({
       depotAddress,
@@ -127,25 +127,12 @@ export const optimizeDeliveryFromDatabase = async (req: Request, res: Response):
     // If date is provided, use it for both fromDate and toDate (same day)
     finalFromDate = date;
     finalToDate = date;
-    console.log(`📅 Using single date parameter: ${date}`);
+    // Using single date parameter
   }
 
   try {
-    console.log(`Optimizing routes from database with ${vehicleCapacities.length} vehicles`);
-    console.log(`Vehicle capacities: [${vehicleCapacities.join(', ')}]`);
-    console.log(`Date range: ${finalFromDate} to ${finalToDate}`);
-    console.log(`Using same filtering as GET /api/delivery/pending (status: Booked,Pending)`);
-    if (startDate || startTime) {
-      console.log(`Using custom start time: ${startDate || 'today'} at ${startTime || 'now'}`);
-    }
-
     // Get user context from request (set by auth middleware)
     const userContext = req.user;
-    if (userContext) {
-      console.log(`👤 User context: ${userContext.userId} (${userContext.companyId})`);
-    } else {
-      console.log('⚠️ No user context - using fallback authentication');
-    }
 
     const result = await deliveryService.optimizeDeliveryRoutesFromDatabase({
       fromDate: finalFromDate,
@@ -181,7 +168,7 @@ export const optimizeDeliveryFromDatabase = async (req: Request, res: Response):
 
 export const healthCheck = async (_req: Request, res: Response): Promise<void> => {
   try {
-    console.log('🏥 Health check endpoint hit');
+    // Health check endpoint
 
     let supabaseStatus = 'unknown';
     try {
