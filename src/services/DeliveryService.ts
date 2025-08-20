@@ -30,6 +30,7 @@ export interface DeliveryRequest {
   };
   deliveries: DeliveryLocation[];
   vehicleCapacities: number[]; // Required - number of vehicles derived from array length
+  serviceTimeMinutes?: number; // Optional - service time per stop in minutes (default: 10)
 }
 
 
@@ -75,7 +76,7 @@ export class DeliveryService {
   private geocodingService: GeocodingService;
   private orToolsService: OrToolsService;
   private routeStorageService: RouteStorageService;
-  private quickFloraTokenManager: QuickFloraTokenManager;
+  private quickFloraTokenManager?: QuickFloraTokenManager; // Make optional
   private authService?: any; // Will be injected for user context
 
   constructor(authService?: any) {
@@ -97,7 +98,7 @@ export class DeliveryService {
     this.geocodingService = new GeocodingService();
     this.orToolsService = new OrToolsService();
     this.routeStorageService = new RouteStorageService();
-    this.quickFloraTokenManager = new QuickFloraTokenManager();
+    // Don't initialize QuickFloraTokenManager here - it will be created when needed
     this.authService = authService;
   }
 
@@ -123,18 +124,16 @@ export class DeliveryService {
       let token: string;
       let companyId: string;
       
-      // Try user authentication first, fallback to token manager if needed
+      // Try user authentication first, throw error if no valid session
       if (params.userContext && this.authService && params.userContext.sessionId) {
         try {
           token = await this.authService.getValidBearerToken(params.userContext.sessionId);
           companyId = params.userContext.companyId;
         } catch (authError) {
-          token = await this.quickFloraTokenManager.getValidToken();
-          companyId = process.env.QUICKFLORA_COMPANY_ID || 'DEFAULT';
+          throw new Error('Failed to authenticate with user session. Please log in again.');
         }
       } else {
-        token = await this.quickFloraTokenManager.getValidToken();
-        companyId = process.env.QUICKFLORA_COMPANY_ID || 'DEFAULT';
+        throw new Error('User authentication required. No valid user session provided.');
       }
       
       // Prepare the request payload for QuickFlora API
@@ -227,7 +226,7 @@ export class DeliveryService {
       toDate: date,
       status: status, // Use provided status or undefined for all
       limit: limit,
-      companyId: userContext.companyId // Always filter by user's company
+      companyId: userContext.companyId // Re-enabled company filtering
     });
   }
 
@@ -519,6 +518,9 @@ export class DeliveryService {
   }
 
   async optimizeDeliveryRoutes(request: DeliveryRequest, customStartTime?: { date: string; time: string; minutesFromMidnight: number }): Promise<DeliveryResult> {
+    // Use configurable service time or default to 10 minutes
+    const serviceTimeMinutes = request.serviceTimeMinutes || 10;
+    const serviceTimeSeconds = serviceTimeMinutes * 60;
     try {
       console.log(`Optimizing ${request.deliveries.length} deliveries with ${request.vehicleCapacities.length} vehicles`);
 
@@ -685,8 +687,8 @@ export class DeliveryService {
             // The solver's arrival time includes service time from previous stops
             // We need to calculate the actual arrival time (without service time at this stop)
             const solverArrivalTime = this.calculateArrivalTime(solverRoute, stopIndex, timeMatrix);
-            const actualArrivalTime = solverArrivalTime - 10; // Subtract service time to get actual arrival
-            const departureTime = actualArrivalTime + 10; // Add service time for departure
+            const actualArrivalTime = solverArrivalTime - serviceTimeMinutes; // Subtract service time to get actual arrival
+            const departureTime = actualArrivalTime + serviceTimeMinutes; // Add service time for departure
             return {
               locationId: delivery.id,
               address: delivery.address,
@@ -700,7 +702,7 @@ export class DeliveryService {
         return {
           vehicleId: solverRoute.vehicle_id + 1,
           stops,
-          departureTime: this.calculateDepartureTime(solverRoute, timeMatrix, customStartTime),
+          departureTime: this.calculateDepartureTime(solverRoute, timeMatrix, customStartTime, serviceTimeSeconds),
           totalDistance: Math.round(solverRoute.distance), // Distance in meters
           totalTime: Math.round(solverRoute.time / 60), // Convert seconds to minutes
           load: solverRoute.load,
@@ -760,7 +762,7 @@ export class DeliveryService {
     return Math.round(arrivalTimeSeconds / 60);
   }
 
-  private calculateDepartureTime(route: any, timeMatrix: number[][], customStartTime?: { date: string; time: string; minutesFromMidnight: number }): string {
+  private calculateDepartureTime(route: any, timeMatrix: number[][], customStartTime?: { date: string; time: string; minutesFromMidnight: number }, serviceTimeSeconds: number = 600): string {
     // If custom start time is provided, use it directly
     if (customStartTime) {
       return customStartTime.time;
@@ -780,7 +782,7 @@ export class DeliveryService {
     
     // Calculate departure time: arrival time - travel time - service time
     const travelTimeOnly = timeMatrix[0][firstDeliveryNode]; // Just travel time, no service time
-    const departureTimeSeconds = arrivalTimeAtFirstDelivery - travelTimeOnly - 600; // Subtract travel time and service time
+    const departureTimeSeconds = arrivalTimeAtFirstDelivery - travelTimeOnly - serviceTimeSeconds; // Subtract travel time and service time
     const departureTimeMinutes = Math.round(departureTimeSeconds / 60);
 
     return this.minutesToTime(departureTimeMinutes);
@@ -799,6 +801,7 @@ export class DeliveryService {
     offset?: number;
     startDate?: string;
     startTime?: string;
+    serviceTimeMinutes?: number;
     userContext?: {
       sessionId: string;
       userId: string;
@@ -901,7 +904,8 @@ export class DeliveryService {
           }
         },
         deliveries: deliveryLocations,
-        vehicleCapacities: params.vehicleCapacities || [50]
+        vehicleCapacities: params.vehicleCapacities || [50],
+        serviceTimeMinutes: params.serviceTimeMinutes || 10
       };
 
       // Step 6: Handle clustering internally based on delivery count
@@ -929,7 +933,8 @@ export class DeliveryService {
               }
             },
             deliveries: targetCluster,
-            vehicleCapacities: params.vehicleCapacities || [50]
+            vehicleCapacities: params.vehicleCapacities || [50],
+            serviceTimeMinutes: params.serviceTimeMinutes || 10
           };
           result = await this.optimizeDeliveryRoutes(clusterRequest, customStartTime);
           // Add cluster information to the result

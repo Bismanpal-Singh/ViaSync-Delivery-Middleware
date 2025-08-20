@@ -11,9 +11,14 @@ let deliveryService: DeliveryService;
 let supabaseService: SupabaseService;
 let geocodingService: GeocodingService;
 
-try {
-  authService = new AuthService();
+// Function to set the AuthService instance from index.ts
+export function setAuthService(authServiceInstance: AuthService) {
+  authService = authServiceInstance;
   deliveryService = new DeliveryService(authService);
+}
+
+try {
+  // Initialize services that don't depend on AuthService
   supabaseService = new SupabaseService({
     url: config.supabase.url,
     key: config.supabase.serviceKey || config.supabase.anonKey
@@ -21,7 +26,7 @@ try {
   geocodingService = new GeocodingService();
   console.log('All services initialized successfully');
 } catch (error) {
-      console.error('Failed to initialize services:', error);
+    console.error('Failed to initialize services:', error);
   throw error; // This will prevent the server from starting with missing config
 }
 
@@ -74,7 +79,7 @@ export const optimizeDelivery = async (req: Request, res: Response): Promise<voi
  * This ensures that the optimization uses the exact same deliveries that the user sees on the frontend
  */
 export const optimizeDeliveryFromDatabase = async (req: Request, res: Response): Promise<void> => {
-  const { fromDate, toDate, status, vehicleCapacities, depotAddress, limit, offset, startDate, startTime, date } = req.body;
+  const { fromDate, toDate, status, vehicleCapacities, depotAddress, limit, offset, startDate, startTime, date, serviceTimeMinutes } = req.body;
 
   // Validate vehicleCapacities array
   if (!vehicleCapacities || !Array.isArray(vehicleCapacities) || vehicleCapacities.length === 0) {
@@ -152,6 +157,7 @@ export const optimizeDeliveryFromDatabase = async (req: Request, res: Response):
       offset,
       startDate,
       startTime,
+      serviceTimeMinutes: serviceTimeMinutes || 10, // Default to 10 minutes if not provided
       userContext
     });
 

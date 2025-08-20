@@ -11,6 +11,9 @@ export interface TripSheet {
   totalStops: number;
   completedStops: number;
   status: string;
+  serviceTimeMinutes: number;
+  notes?: string;
+  deliveryInstructions?: any;
   orders: any[];
   optimizationResult: {
     routes: any[];
@@ -73,6 +76,7 @@ export class TripSheetService {
     startTime?: string;
     driverName?: string;
     vehicleName?: string;
+    serviceTimeMinutes?: number;
     optimizationResult: DeliveryResult;
     companyId: string;
     createdBy: string;
@@ -82,9 +86,10 @@ export class TripSheetService {
     
     const startTime = params.startTime || '08:00';
     const endTime = this.calculateEndTime(startTime, params.optimizationResult.totalTime);
-
+    
     const tripSheetData = {
       id: tripSheetId,
+      sheet_name: params.sheetName || `Trip Sheet ${tripSheetId}`,
       driver: params.driverName || 'Unassigned',
       vehicle: params.vehicleName || `Vehicle-${params.vehicleCapacities.length > 1 ? 'Multi' : '01'}`,
       start_time: startTime,
@@ -95,6 +100,7 @@ export class TripSheetService {
       dispatcher: params.createdBy,
       route_date: params.deliveryDate,
       mileage: `${Math.round(params.optimizationResult.totalDistance / 1609.34)} miles`,
+      service_time_minutes: params.serviceTimeMinutes || 10,
       orders: this.formatOrdersForTripSheet(params.optimizationResult.routes)
     };
     
@@ -108,7 +114,7 @@ export class TripSheetService {
       throw new Error(`Failed to create trip sheet: ${sheetError.message}`);
     }
 
-    return tripSheet;
+    return this.formatTripSheet(tripSheet);
   }
 
   /**
@@ -183,6 +189,57 @@ export class TripSheetService {
   }
 
   /**
+   * Update trip sheet
+   */
+  async updateTripSheet(tripSheetId: string, updates: {
+    sheetName?: string;
+    driverName?: string;
+    vehicleName?: string;
+    startTime?: string;
+    status?: string;
+    notes?: string;
+    deliveryInstructions?: any;
+  }): Promise<TripSheet> {
+    const updatePayload: any = {
+      sheet_name: updates.sheetName,
+      driver: updates.driverName,
+      vehicle: updates.vehicleName,
+      start_time: updates.startTime,
+      status: updates.status,
+      notes: updates.notes,
+      delivery_instructions: updates.deliveryInstructions,
+      updated_at: new Date().toISOString()
+    };
+
+    const { data: tripSheet, error } = await this.supabase
+      .from('trip_sheets')
+      .update(updatePayload)
+      .eq('id', tripSheetId)
+      .select()
+      .single();
+
+    if (error) {
+      throw new Error(`Failed to update trip sheet: ${error.message}`);
+    }
+
+    return this.formatTripSheet(tripSheet);
+  }
+
+  /**
+   * Delete trip sheet
+   */
+  async deleteTripSheet(tripSheetId: string): Promise<void> {
+    const { error } = await this.supabase
+      .from('trip_sheets')
+      .delete()
+      .eq('id', tripSheetId);
+
+    if (error) {
+      throw new Error(`Failed to delete trip sheet: ${error.message}`);
+    }
+  }
+
+  /**
    * Format trip sheet data for frontend
    */
   private formatTripSheet(tripSheet: any): TripSheet {
@@ -205,7 +262,7 @@ export class TripSheetService {
 
     return {
       id: tripSheet.id,
-      tripSheetName: `Trip Sheet ${tripSheet.id}`,
+      tripSheetName: tripSheet.sheet_name || `Trip Sheet ${tripSheet.id}`,
       driverName: tripSheet.driver || 'Unassigned',
       vehicleName: tripSheet.vehicle || 'Unassigned',
       deliveryDate: tripSheet.route_date,
@@ -213,7 +270,10 @@ export class TripSheetService {
       depotAddress: 'GTS Flowers Inc, 8002 Concord Hwy, Monroe, NC 28110',
       totalStops: tripSheet.total_stops || orders.length,
       completedStops: completedStops,
-      status: 'active',
+      status: tripSheet.status || 'active',
+      serviceTimeMinutes: tripSheet.service_time_minutes || 10,
+      notes: tripSheet.notes || undefined,
+      deliveryInstructions: tripSheet.delivery_instructions ?? undefined,
       orders: formattedOrders,
       optimizationResult: {
         routes: tripSheet.orders || [],
@@ -240,7 +300,7 @@ export class TripSheetService {
     return `${endHours.toString().padStart(2, '0')}:${endMins.toString().padStart(2, '0')}`;
   }
 
-  private formatOrdersForTripSheet(routes: any[]): any[] {
+    private formatOrdersForTripSheet(routes: any[]): any[] {
     const orders: any[] = [];
 
     routes.forEach((route, routeIndex) => {

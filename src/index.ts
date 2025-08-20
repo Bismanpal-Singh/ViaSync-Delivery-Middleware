@@ -10,6 +10,7 @@ import deliveryRoutes from './routes/deliveryRoutes';
 import routeRoutes from './routes/routeRoutes';
 import tripSheetRoutes from './routes/tripSheetRoutes';
 import authRoutes, { setAuthService } from './routes/authRoutes';
+import { setAuthService as setDeliveryControllerAuthService } from './controllers/deliveryController';
 import { authenticateUser, optionalAuth } from './middleware/authMiddleware';
 import { AuthService } from './services/AuthService';
 
@@ -19,8 +20,9 @@ const PORT = process.env.PORT || 3000;
 // Initialize AuthService for middleware
 const authService = new AuthService();
 
-// Pass the same AuthService instance to auth routes
+// Pass the same AuthService instance to auth routes and delivery controller
 setAuthService(authService);
+setDeliveryControllerAuthService(authService);
 
 // CORS configuration for Vite frontend
 const corsOptions = {

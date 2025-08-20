@@ -9,7 +9,7 @@ const deliveryService = new DeliveryService();
  * Generate trip sheet from optimized route
  */
 export const generateTripSheet = async (req: Request, res: Response): Promise<void> => {
-  const { sheetName, deliveryDate, vehicleCapacities, startTime, driverName, vehicleName, optimizationResult } = req.body;
+  const { sheetName, tripSheetName, deliveryDate, vehicleCapacities, startTime, driverName, vehicleName, serviceTimeMinutes, optimizationResult } = req.body;
   const userContext = req.user;
 
   if (!userContext) {
@@ -39,12 +39,13 @@ export const generateTripSheet = async (req: Request, res: Response): Promise<vo
     }
 
     const tripSheet = await tripSheetService.generateTripSheet({
-      sheetName,
+      sheetName: tripSheetName || sheetName, // Accept both field names
       deliveryDate,
       vehicleCapacities,
       startTime,
       driverName,
       vehicleName,
+      serviceTimeMinutes: serviceTimeMinutes || 10, // Default to 10 minutes if not provided
       optimizationResult,
       companyId: userContext.companyId,
       createdBy: userContext.userId
@@ -199,6 +200,79 @@ export const getTripSheetsByDateRange = async (req: Request, res: Response): Pro
       success: false,
       error: error instanceof Error ? error.message : 'Unknown error occurred',
       message: 'Failed to get trip sheets'
+    });
+  }
+};
+
+/**
+ * Update trip sheet
+ */
+export const updateTripSheet = async (req: Request, res: Response): Promise<void> => {
+  const { tripSheetId } = req.params;
+  const { sheetName, driverName, vehicleName, startTime, notes, deliveryInstructions } = req.body;
+  const userContext = req.user;
+
+  if (!userContext) {
+    res.status(401).json({
+      success: false,
+      error: 'Authentication required'
+    });
+    return;
+  }
+
+  try {
+    const updatedTripSheet = await tripSheetService.updateTripSheet(tripSheetId, {
+      sheetName,
+      driverName,
+      vehicleName,
+      startTime,
+      notes,
+      deliveryInstructions
+    });
+
+    res.json({
+      success: true,
+      data: updatedTripSheet,
+      message: 'Trip sheet updated successfully'
+    });
+
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: error instanceof Error ? error.message : 'Unknown error occurred',
+      message: 'Failed to update trip sheet'
+    });
+  }
+};
+
+/**
+ * Delete trip sheet
+ */
+export const deleteTripSheet = async (req: Request, res: Response): Promise<void> => {
+  const { tripSheetId } = req.params;
+  const userContext = req.user;
+
+  if (!userContext) {
+    res.status(401).json({
+      success: false,
+      error: 'Authentication required'
+    });
+    return;
+  }
+
+  try {
+    await tripSheetService.deleteTripSheet(tripSheetId);
+
+    res.json({
+      success: true,
+      message: 'Trip sheet deleted successfully'
+    });
+
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: error instanceof Error ? error.message : 'Unknown error occurred',
+      message: 'Failed to delete trip sheet'
     });
   }
 };
