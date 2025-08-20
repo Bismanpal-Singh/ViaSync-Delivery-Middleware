@@ -225,8 +225,8 @@ export const getAllDeliveries = async (req: Request, res: Response): Promise<voi
       
       try {
         // Get deliveries with sync using authenticated user context
-        // For the pending endpoint, get all statuses (not just Booked)
-        deliveries = await deliveryService.getPendingDeliveriesForDate(date, limit, userContext, undefined);
+        // For the deliveries-by-date endpoint, get all statuses (not just specific status)
+        deliveries = await deliveryService.getDeliveriesForDate(date, limit, userContext, undefined);
       } catch (error) {
         console.error('Failed to get deliveries:', error);
         res.status(500).json({

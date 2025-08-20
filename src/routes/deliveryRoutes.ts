@@ -16,10 +16,13 @@ router.post('/optimize-from-database', DeliveryController.optimizeDeliveryFromDa
 // Health check
 router.get('/health', DeliveryController.healthCheck);
 
-// Get all deliveries
+// Get all deliveries (date ranges, raw array format)
 router.get('/deliveries', DeliveryController.getAllDeliveries);
 
-// Get all pending deliveries for a date (for map display) - backward compatibility
+// Get deliveries for a specific date (enhanced format with stats)
+router.get('/deliveries-by-date', DeliveryController.getAllDeliveries);
+
+// Backward compatibility - deprecated, use /deliveries-by-date instead
 router.get('/pending', DeliveryController.getAllDeliveries);
 
 // Get dashboard statistics

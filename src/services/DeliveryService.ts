@@ -196,11 +196,11 @@ export class DeliveryService {
 
 
   /**
-   * Common method to fetch deliveries using the same filtering logic
-   * as the GET /api/delivery/pending endpoint
+   * Common method to fetch deliveries for a specific date with company filtering
+   * Used by the GET /api/delivery/deliveries-by-date endpoint
    * This ensures consistency between what the user sees and what gets optimized
    */
-  public async getPendingDeliveriesForDate(date: string, limit: number = 200, userContext: {
+  public async getDeliveriesForDate(date: string, limit: number = 200, userContext: {
     sessionId: string;
     userId: string;
     companyId: string;
@@ -798,11 +798,11 @@ export class DeliveryService {
     try {
       // Optimizing routes from database
 
-      // Step 1: Get real deliveries from Supabase using the same filtering logic as GET /api/delivery/pending
-      // If a specific date is provided, use the same logic as the pending endpoint
+      // Step 1: Get real deliveries from Supabase using the same filtering logic as GET /api/delivery/deliveries-by-date
+      // If a specific date is provided, use the same logic as the deliveries-by-date endpoint
       let deliveries: any[];
       if (params.fromDate && params.toDate && params.fromDate === params.toDate) {
-        // Single date - use the same logic as pending endpoint
+        // Single date - use the same logic as deliveries-by-date endpoint
         // Using single date filtering
         
         // Require user context for single date filtering
@@ -810,7 +810,7 @@ export class DeliveryService {
           throw new Error('Authentication required for single date filtering');
         }
         
-        deliveries = await this.getPendingDeliveriesForDate(params.fromDate, params.limit || 200, params.userContext);
+        deliveries = await this.getDeliveriesForDate(params.fromDate, params.limit || 200, params.userContext);
       } else {
         // Date range or other criteria - use the original logic but with consistent status
         // Using date range filtering
