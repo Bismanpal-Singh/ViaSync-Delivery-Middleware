@@ -54,7 +54,7 @@ export const generateTripSheet = async (req: Request, res: Response): Promise<vo
     res.json({
       success: true,
       data: tripSheet,
-      message: `Trip sheet "${tripSheet.id}" generated successfully with ${tripSheet.totalStops} stops`
+      message: `Trip sheet "${tripSheet.id}" generated successfully with ${tripSheet.totalStops} stops. Orders have been marked as "Routed".`
     });
 
   } catch (error) {

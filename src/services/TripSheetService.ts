@@ -1,4 +1,5 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
+import { SupabaseService } from './SupabaseService';
 
 export interface TripSheet {
   id: string;
@@ -34,9 +35,14 @@ export interface DeliveryResult {
 
 export class TripSheetService {
   private supabase: SupabaseClient;
+  private supabaseService: SupabaseService;
 
   constructor() {
     this.supabase = createClient(process.env.SUPABASE_URL!, process.env.SUPABASE_ANON_KEY!);
+    this.supabaseService = new SupabaseService({
+      url: process.env.SUPABASE_URL!,
+      key: process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY!
+    });
   }
 
   /**
@@ -64,6 +70,31 @@ export class TripSheetService {
     const month = date.getMonth() + 1;
     const random = Math.floor(Math.random() * 999999).toString().padStart(6, '0');
     return `${day}-${month}-${random}`;
+  }
+
+  /**
+   * Extract order IDs from optimization result for status updates
+   */
+  private extractOrderIdsFromOptimizationResult(optimizationResult: DeliveryResult): string[] {
+    const orderIds: Set<string> = new Set();
+    
+    optimizationResult.routes.forEach(route => {
+      route.stops.forEach((stop: any) => {
+        // Skip depot stops
+        if (stop.locationId && stop.locationId !== 'depot') {
+          // Handle merged deliveries (deliveryIds array) or single delivery (locationId)
+          if (stop.deliveryIds && stop.deliveryIds.length > 0) {
+            // Use deliveryIds if available (for merged deliveries)
+            stop.deliveryIds.forEach((id: string) => orderIds.add(id));
+          } else {
+            // Use locationId for single deliveries
+            orderIds.add(stop.locationId);
+          }
+        }
+      });
+    });
+    
+    return Array.from(orderIds);
   }
 
   /**
@@ -114,7 +145,30 @@ export class TripSheetService {
       throw new Error(`Failed to create trip sheet: ${sheetError.message}`);
     }
 
-    return this.formatTripSheet(tripSheet);
+    // Update order statuses to "Routed" after successful trip sheet creation
+    try {
+      const orderIds = this.extractOrderIdsFromOptimizationResult(params.optimizationResult);
+      if (orderIds.length > 0) {
+        console.log(`🚚 Updating ${orderIds.length} orders to "Routed" status for trip sheet ${tripSheetId}`);
+        const updateResult = await this.supabaseService.updateOrderStatus(orderIds, 'Routed');
+        console.log(`✅ Successfully updated ${updateResult.updated} orders to "Routed" status`);
+
+        // Attach updated order records to the trip sheet response so the frontend can update immediately
+        if (updateResult.records && Array.isArray(updateResult.records)) {
+          (tripSheet as any).updatedOrders = updateResult.records;
+        }
+        
+        if (updateResult.failed > 0) {
+          console.warn(`⚠️ Failed to update ${updateResult.failed} orders to "Routed" status`);
+        }
+      }
+    } catch (statusUpdateError) {
+      // Don't fail trip sheet creation if status update fails
+      console.error('❌ Failed to update order statuses to "Routed":', statusUpdateError);
+      console.log('ℹ️ Trip sheet was created successfully, but order statuses were not updated');
+    }
+
+    return await this.formatTripSheet(tripSheet);
   }
 
   /**
@@ -129,7 +183,7 @@ export class TripSheetService {
 
     if (sheetError || !tripSheet) return null;
 
-    return this.formatTripSheet(tripSheet);
+    return await this.formatTripSheet(tripSheet);
   }
 
   /**
@@ -143,7 +197,7 @@ export class TripSheetService {
 
     if (error) throw new Error(`Failed to get trip sheets: ${error.message}`);
 
-    return (tripSheets || []).map(tripSheet => this.formatTripSheet(tripSheet));
+    return await Promise.all((tripSheets || []).map(tripSheet => this.formatTripSheet(tripSheet)));
   }
 
   /**
@@ -165,7 +219,7 @@ export class TripSheetService {
     const { data, error } = await query;
     if (error) throw new Error(`Failed to get trip sheets: ${error.message}`);
 
-    return (data || []).map(tripSheet => this.formatTripSheet(tripSheet));
+    return await Promise.all((data || []).map(tripSheet => this.formatTripSheet(tripSheet)));
   }
 
   /**
@@ -185,7 +239,7 @@ export class TripSheetService {
       throw new Error(`Failed to get trip sheets: ${error.message}`);
     }
 
-    return (tripSheets || []).map(tripSheet => this.formatTripSheet(tripSheet));
+    return await Promise.all((tripSheets || []).map(tripSheet => this.formatTripSheet(tripSheet)));
   }
 
   /**
@@ -222,7 +276,7 @@ export class TripSheetService {
       throw new Error(`Failed to update trip sheet: ${error.message}`);
     }
 
-    return this.formatTripSheet(tripSheet);
+    return await this.formatTripSheet(tripSheet);
   }
 
   /**
@@ -242,7 +296,7 @@ export class TripSheetService {
   /**
    * Format trip sheet data for frontend
    */
-  private formatTripSheet(tripSheet: any): TripSheet {
+  private async formatTripSheet(tripSheet: any): Promise<TripSheet> {
     const orders = tripSheet.orders || [];
     const completedStops = tripSheet.completed_stops || 0;
 
@@ -267,7 +321,7 @@ export class TripSheetService {
       vehicleName: tripSheet.vehicle || 'Unassigned',
       deliveryDate: tripSheet.route_date,
       startTime: tripSheet.start_time || '08:00',
-      depotAddress: 'GTS Flowers Inc, 8002 Concord Hwy, Monroe, NC 28110',
+      depotAddress: await this.supabaseService.getShopLocation(tripSheet.company_id || undefined),
       totalStops: tripSheet.total_stops || orders.length,
       completedStops: completedStops,
       status: tripSheet.status || 'active',

@@ -79,7 +79,7 @@ export const optimizeDelivery = async (req: Request, res: Response): Promise<voi
  * This ensures that the optimization uses the exact same deliveries that the user sees on the frontend
  */
 export const optimizeDeliveryFromDatabase = async (req: Request, res: Response): Promise<void> => {
-  const { fromDate, toDate, status, vehicleCapacities, depotAddress, limit, offset, startDate, startTime, date, serviceTimeMinutes } = req.body;
+  const { fromDate, toDate, status, vehicleCapacities, depotAddress, limit, offset, startDate, startTime, date, serviceTimeMinutes, locationId } = req.body;
 
   // Validate vehicleCapacities array
   if (!vehicleCapacities || !Array.isArray(vehicleCapacities) || vehicleCapacities.length === 0) {
@@ -145,6 +145,7 @@ export const optimizeDeliveryFromDatabase = async (req: Request, res: Response):
       startDate,
       startTime,
       serviceTimeMinutes: serviceTimeMinutes || 10, // Default to 10 minutes if not provided
+      locationId,
       userContext
     });
 
@@ -202,7 +203,7 @@ export const healthCheck = async (_req: Request, res: Response): Promise<void> =
 };
 
 export const getAllDeliveries = async (req: Request, res: Response): Promise<void> => {
-  const { fromDate, toDate, status, date } = req.query;
+  const { fromDate, toDate, status, date, locationId } = req.query;
   const limit = req.query.limit ? parseInt(req.query.limit as string) : 50;
   const offset = req.query.offset ? parseInt(req.query.offset as string) : 0;
 
@@ -224,11 +225,13 @@ export const getAllDeliveries = async (req: Request, res: Response): Promise<voi
       }
       
       try {
+        console.log(`🔄 getAllDeliveries: Fetching deliveries for date=${date}, companyId=${userContext.companyId}`);
         // Get deliveries with sync using authenticated user context
         // For the deliveries-by-date endpoint, get all statuses (not just specific status)
-        deliveries = await deliveryService.getDeliveriesForDate(date, limit, userContext, undefined);
+        deliveries = await deliveryService.getDeliveriesForDate(date, limit, userContext, undefined, typeof locationId === 'string' ? locationId : undefined);
+        console.log(`📦 getAllDeliveries: Retrieved ${deliveries?.length || 0} deliveries`);
       } catch (error) {
-        console.error('Failed to get deliveries:', error);
+        console.error('❌ Failed to get deliveries:', error);
         res.status(500).json({
           success: false,
           error: error instanceof Error ? error.message : 'Failed to fetch deliveries'
@@ -257,7 +260,8 @@ export const getAllDeliveries = async (req: Request, res: Response): Promise<voi
         status: status as string,
         limit,
         offset,
-        companyId: userContext?.companyId
+        companyId: userContext?.companyId,
+        locationId: typeof locationId === 'string' ? locationId : undefined
       });
 
       // Return a raw array as expected by the frontend (backward compatibility)
@@ -336,8 +340,79 @@ export const updateDeliveryStatus = async (req: Request, res: Response): Promise
   }
 };
 
+/**
+ * Bulk update delivery statuses for multiple deliveries at once
+ * Used when generating trip sheets to mark all deliveries as "Routed"
+ */
+export const bulkUpdateDeliveryStatus = async (req: Request, res: Response): Promise<void> => {
+  const { deliveryIds, status } = req.body;
+  const userContext = req.user;
+
+  // Validate request
+  if (!Array.isArray(deliveryIds) || deliveryIds.length === 0) {
+    res.status(400).json({ 
+      success: false, 
+      error: 'deliveryIds must be a non-empty array' 
+    });
+    return;
+  }
+
+  if (!status || typeof status !== 'string') {
+    res.status(400).json({ 
+      success: false, 
+      error: 'status is required and must be a string' 
+    });
+    return;
+  }
+
+  // Validate all delivery IDs are numbers
+  if (deliveryIds.some(id => !Number.isInteger(id) || id <= 0)) {
+    res.status(400).json({ 
+      success: false, 
+      error: 'All deliveryIds must be positive integers' 
+    });
+    return;
+  }
+
+  try {
+    console.log(`🔄 Bulk updating ${deliveryIds.length} deliveries to status: ${status}`);
+    
+    // Update statuses in Supabase
+    const updateResult = await supabaseService.updateOrderStatus(deliveryIds, status);
+    
+    console.log(`✅ Bulk update completed:`, {
+      requested: deliveryIds.length,
+      updated: updateResult.updated,
+      failed: updateResult.failed
+    });
+
+    // TODO: If needed, sync status changes back to QuickFlora API
+    // This would require implementing a method to update QuickFlora order statuses
+    // For now, we're only updating the local Supabase database
+
+    res.json({
+      success: true,
+      data: {
+        requested: deliveryIds.length,
+        updated: updateResult.updated,
+        failed: updateResult.failed,
+        status: status
+      },
+      message: `Successfully updated ${updateResult.updated} out of ${deliveryIds.length} deliveries to ${status}`
+    });
+
+  } catch (error) {
+    console.error('❌ Failed to bulk update delivery statuses:', error);
+    res.status(500).json({
+      success: false,
+      error: error instanceof Error ? error.message : 'Unknown error occurred',
+      message: 'Failed to bulk update delivery statuses'
+    });
+  }
+};
+
 export const getPendingDeliveriesWithCoords = async (req: Request, res: Response): Promise<void> => {
-  const { date } = req.query;
+  const { date, locationId } = req.query;
   if (!date || typeof date !== 'string') {
     res.status(400).json({ success: false, error: 'Missing or invalid date parameter' });
     return;
@@ -348,7 +423,8 @@ export const getPendingDeliveriesWithCoords = async (req: Request, res: Response
       fromDate: date,
       toDate: date,
       status: 'pending',
-      limit: 500
+      limit: 500,
+      locationId: typeof locationId === 'string' ? locationId : undefined
     });
     // For each delivery, get lat/lon using geocoding cache
     const results = await Promise.all(deliveries.map(async (delivery) => {
@@ -374,7 +450,7 @@ export const getPendingDeliveriesWithCoords = async (req: Request, res: Response
 };
 
 export const getDashboardStats = async (req: Request, res: Response): Promise<void> => {
-  const { date } = req.query;
+  const { date, locationId } = req.query;
   const userContext = req.user;
 
   try {
@@ -396,6 +472,7 @@ export const getDashboardStats = async (req: Request, res: Response): Promise<vo
       toDate: targetDate,
       status: undefined, // Get ALL statuses
       userContext: userContext,
+      locationId: typeof locationId === 'string' ? locationId : undefined,
       returnData: true // Return data directly
     });
 
@@ -405,13 +482,18 @@ export const getDashboardStats = async (req: Request, res: Response): Promise<vo
       syncResult = await supabaseService.syncWithQuickFlora(allDeliveries, userContext.companyId);
     }
 
-    // Handle the return type (can be void or any[])
-    const deliveries = Array.isArray(allDeliveries) ? allDeliveries : [];
+    // Step 3: Read back from Supabase so stats reflect local updates (e.g., Routed)
+    const deliveries = await supabaseService.getDeliveries({
+      fromDate: targetDate,
+      toDate: targetDate,
+      status: undefined,
+      companyId: userContext.companyId,
+      locationId: typeof locationId === 'string' ? locationId : undefined,
+      limit: 2000
+    });
 
-    // Simple stats - just total count for now
-    const stats = {
-      total: deliveries.length
-    };
+    // Calculate detailed stats using the same function
+    const stats = calculateDashboardStats(deliveries);
     
     res.json({
       success: true,
@@ -448,7 +530,7 @@ function calculateDashboardStats(deliveries: any[]) {
     // Main Stats Cards
     total: deliveries.length,
     delivered: 0,
-    inProgress: 0, // Shipped + In Transit
+    inProgress: 0, // Shipped + Picked + In Transit
     activeDrivers: 0,
     
     // Performance Overview
@@ -456,22 +538,41 @@ function calculateDashboardStats(deliveries: any[]) {
     remaining: 0,
     urgentDeliveries: 0,
     
-    // Status Breakdown
+    // Individual Status Breakdown (all possible statuses)
     booked: 0,
     shipped: 0,
+    invoiced: 0,
+    picked: 0,
+    returned: 0,
     inTransit: 0,
+    routed: 0, // For orders marked as routed by trip sheet generation
+    unknown: 0, // For any other statuses
     
     // Driver tracking
     uniqueDrivers: new Set<string>()
   };
 
+  let debugCounter = 0;
   deliveries.forEach(delivery => {
-    const status = delivery.status || delivery.order_status || 'Unknown';
+    // Debug: Log the first few deliveries to see what fields contain status info
+    if (debugCounter < 3) {
+      console.log(`📊 Debug delivery ${debugCounter + 1}:`, {
+        order_status: delivery.order_status,
+        allStatusFields: Object.keys(delivery).filter(key => key.toLowerCase().includes('status'))
+      });
+    }
+    debugCounter++;
+    
+    // Use only order_status in DB; fallback to OrderStatus from API if present in memory
+    const rawStatus = delivery.order_status || delivery.OrderStatus || 'Unknown';
+    let status = rawStatus.toString().toLowerCase();
+    // No ShowRoute mapping; strictly use OrderStatus
+    
     const priority = delivery.priority || '';
     const assignedTo = delivery.assigned_to;
 
-    // Count by status
-    switch (status.toLowerCase()) {
+    // Count by status (using exact status names you provided)
+    switch (status) {
       case 'delivered':
         stats.delivered++;
         break;
@@ -479,12 +580,31 @@ function calculateDashboardStats(deliveries: any[]) {
         stats.shipped++;
         stats.inProgress++;
         break;
+      case 'invoiced':
+        stats.invoiced++;
+        break;
+      case 'booked':
+        stats.booked++;
+        break;
+      case 'picked':
+        stats.picked++;
+        stats.inProgress++;
+        break;
+      case 'returned':
+        stats.returned++;
+        break;
+      case 'routed':
+        stats.routed++;
+        break;
       case 'in transit':
         stats.inTransit++;
         stats.inProgress++;
         break;
-      case 'booked':
-        stats.booked++;
+      default:
+        stats.unknown++;
+        if (stats.unknown <= 5) { // Only log first 5 unknown statuses to avoid spam
+          console.log(`📊 Unknown status found: "${status}" (original: "${rawStatus}")`);
+        }
         break;
     }
 
@@ -516,10 +636,15 @@ function calculateDashboardStats(deliveries: any[]) {
     remaining: stats.remaining,
     urgentDeliveries: stats.urgentDeliveries,
     
-    // Status Breakdown
+    // Individual Status Breakdown
     booked: stats.booked,
     shipped: stats.shipped,
+    invoiced: stats.invoiced,
+    picked: stats.picked,
+    returned: stats.returned,
+    routed: stats.routed,
     inTransit: stats.inTransit,
+    unknown: stats.unknown,
     
     // Additional useful data
     uniqueDrivers: Array.from(stats.uniqueDrivers)

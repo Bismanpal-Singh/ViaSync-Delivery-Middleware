@@ -105,6 +105,7 @@ export class SupabaseService {
     limit?: number;
     offset?: number;
     companyId?: string;
+    locationId?: string;
   }): Promise<Delivery[]> {
     try {
       let query = this.supabase
@@ -112,12 +113,16 @@ export class SupabaseService {
         .select('*')
         .order('order_ship_date', { ascending: false });
 
-      // Apply date filters if provided
+      // Apply date filters if provided (handle both date and datetime formats)
       if (params.fromDate) {
-        query = query.gte('order_ship_date', params.fromDate);
+        // Convert date to start of day for comparison
+        const fromDateTime = params.fromDate.includes('T') ? params.fromDate : `${params.fromDate}T00:00:00`;
+        query = query.gte('order_ship_date', fromDateTime);
       }
       if (params.toDate) {
-        query = query.lte('order_ship_date', params.toDate);
+        // Convert date to end of day for comparison
+        const toDateTime = params.toDate.includes('T') ? params.toDate : `${params.toDate}T23:59:59`;
+        query = query.lte('order_ship_date', toDateTime);
       }
 
       // Apply status filter if provided
@@ -135,6 +140,11 @@ export class SupabaseService {
         query = query.eq('company_id', params.companyId);
       }
 
+      // Apply location filter if provided (e.g., Geneva, Elgin)
+      if (params.locationId) {
+        query = query.eq('location_id', params.locationId);
+      }
+
       // Apply pagination
       if (params.limit) {
         query = query.limit(params.limit);
@@ -143,11 +153,30 @@ export class SupabaseService {
         query = query.range(params.offset, (params.offset + (params.limit || 10)) - 1);
       }
 
+      console.log(`🔍 Querying Supabase with params:`, {
+        fromDate: params.fromDate,
+        toDate: params.toDate,
+        status: params.status,
+        companyId: params.companyId,
+        locationId: params.locationId,
+        limit: params.limit
+      });
+
       const { data, error } = await query;
 
       if (error) {
-        console.error('Supabase query error:', error);
+        console.error('❌ Supabase query error:', error);
         throw new Error(`Failed to fetch deliveries: ${error.message}`);
+      }
+
+      console.log(`📊 Query returned ${data?.length || 0} records`);
+      if (data && data.length > 0) {
+        console.log(`📝 First record sample:`, {
+          order_number: data[0].order_number,
+          order_ship_date: data[0].order_ship_date,
+          company_id: data[0].company_id,
+          order_status: data[0].order_status
+        });
       }
 
       return data || [];
@@ -161,6 +190,7 @@ export class SupabaseService {
     fromDate?: string;
     toDate?: string;
     status?: string;
+    companyId?: string;
   }): Promise<Array<{
     delivery: Delivery;
     pickupLocation: string;
@@ -185,6 +215,11 @@ export class SupabaseService {
         query = query.lte('order_ship_date', params.toDate);
       }
 
+      // Apply company filter if provided
+      if (params.companyId) {
+        query = query.eq('company_id', params.companyId);
+      }
+
       const { data, error } = await query;
 
       if (error) {
@@ -193,7 +228,7 @@ export class SupabaseService {
       }
 
       // Get shop location for pickup
-      const shopLocation = await this.getShopLocation();
+      const shopLocation = await this.getShopLocation(params.companyId);
 
       const deliveriesForQuotes = (data || []).map(delivery => ({
         delivery,
@@ -283,11 +318,51 @@ export class SupabaseService {
   }
 
   // Method to get shop location from company_locations table
-  async getShopLocation(): Promise<string> {
-    // Hardcoded shop address for GTS Flowers Inc
-    const hardcodedAddress = 'GTS Flowers Inc, 8002 Concord Hwy, Monroe, NC 28110';
-    console.log(`✅ Using hardcoded shop location: ${hardcodedAddress}`);
-    return hardcodedAddress;
+  async getShopLocation(companyId?: string): Promise<string> {
+    const fallbackAddress = 'Town & Country Gardens Geneva, 216 W State St, Geneva, IL 60134';
+    
+    try {
+      if (!companyId) {
+        console.warn('⚠️ No companyId provided, using fallback address');
+        return fallbackAddress;
+      }
+
+      console.log(`🏪 Fetching shop location for company: ${companyId}`);
+      
+      // Try different possible field names for company ID
+      const { data, error } = await this.supabase
+        .from('company_locations')
+        .select('*')
+        .or(`company_id.eq.${companyId},id.eq.${companyId},name.eq.${companyId}`)
+        .limit(1);
+
+      if (error) {
+        console.error('❌ Error fetching company location:', error);
+        console.log(`❌ Using fallback due to schema error: ${fallbackAddress}`);
+        return fallbackAddress;
+      }
+
+      if (data && data.length > 0) {
+        const location = data[0];
+        // Try different possible field combinations
+        const companyName = location.company_name || location.name || 'Town & Country Gardens Geneva';
+        const address = location.address || location.street || location.address1 || '216 W State St';
+        const city = location.city || 'Geneva';
+        const state = location.state || 'IL';
+        const zip = location.zip || location.zipcode || '60134';
+        
+        const fullAddress = `${companyName}, ${address}, ${city}, ${state} ${zip}`;
+        console.log(`✅ Using company location: ${fullAddress}`);
+        return fullAddress;
+      } else {
+        console.warn(`⚠️ No location found for company ${companyId}, using fallback`);
+        return fallbackAddress;
+      }
+    } catch (error) {
+      console.error('❌ Error in getShopLocation:', error);
+      console.log(`❌ Using fallback due to error: ${fallbackAddress}`);
+      return fallbackAddress;
+    }
   }
 
   // Method to get all company locations (useful for debugging)
@@ -392,12 +467,86 @@ export class SupabaseService {
   }
 
   /**
+   * Update order status for multiple deliveries (for trip sheet generation)
+   */
+  async updateOrderStatus(orderIds: string[], newStatus: string): Promise<{ updated: number, failed: number, records?: { id: number; order_number: string; order_status: string }[] }> {
+    try {
+      console.log(`📝 Updating status for ${orderIds.length} orders to "${newStatus}"...`);
+      
+      // Convert string IDs to integers since the database id field is an integer
+      const numericOrderIds = orderIds.map(id => parseInt(id, 10)).filter(id => !isNaN(id));
+      
+      const { data, error } = await this.supabase
+        .from('quickflora_deliveries')
+        .update({ 
+          order_status: newStatus,
+          updated_at: new Date().toISOString()
+        })
+        .in('id', numericOrderIds)
+        .select();
+
+      if (error) {
+        console.error('❌ Supabase update error:', error);
+        throw new Error(`Failed to update order statuses: ${error.message}`);
+      }
+
+      // Use data.length instead of count since count can be null
+      const successfulCount = data?.length || 0;
+      console.log(`✅ Updated ${successfulCount} orders to "${newStatus}"`);
+      
+      // Verify the updates persisted by re-reading the records
+      const { data: verifyRecords, error: verifyError } = await this.supabase
+        .from('quickflora_deliveries')
+        .select('id, order_number, order_status')
+        .in('id', numericOrderIds);
+
+      if (!verifyError && verifyRecords) {
+        console.log(`🔍 Verification after update:`);
+        verifyRecords.forEach(record => {
+          console.log(`  - ID: ${record.id}, Order: ${record.order_number}, Status: ${record.order_status}`);
+        });
+      }
+      
+      return { 
+        updated: successfulCount, 
+        failed: orderIds.length - successfulCount,
+        records: verifyRecords || []
+      };
+    } catch (error) {
+      console.error('❌ Failed to update order statuses:', error);
+      throw new Error('Failed to update order statuses');
+    }
+  }
+
+  /**
    * Syncs delivery data from QuickFlora API to Supabase database.
    * Performs an upsert operation to add new deliveries and update existing ones.
    */
   async syncWithQuickFlora(deliveries: any[], companyId?: string): Promise<{ added: number, updated: number, failed: number }> {
     if (!deliveries || deliveries.length === 0) {
       return { added: 0, updated: 0, failed: 0 };
+    }
+
+    // Preserve locally-updated statuses like "Routed" by checking existing records first
+    let existingStatusByOrderNumber: Record<string, string> = {};
+    try {
+      const orderNumbers = deliveries
+        .map(d => d.OrderNumber)
+        .filter((n: any) => typeof n === 'string' || typeof n === 'number');
+      if (orderNumbers.length > 0) {
+        const { data: existingRows } = await this.supabase
+          .from('quickflora_deliveries')
+          .select('order_number, order_status')
+          .in('order_number', orderNumbers)
+          .eq('company_id', companyId || '');
+        if (Array.isArray(existingRows)) {
+          existingRows.forEach((row: any) => {
+            if (row && row.order_number) existingStatusByOrderNumber[String(row.order_number)] = row.order_status || '';
+          });
+        }
+      }
+    } catch (_) {
+      // Non-fatal - if this lookup fails, we still proceed with upsert
     }
 
     const recordsToUpsert = deliveries.map(d => {
@@ -441,7 +590,10 @@ export class SupabaseService {
         transmit_to_delivery: d.TransmitToDelivery === 1 || d.TransmitToDelivery === true || false,
         posted: d.Posted === 1 || d.Posted === true || false,
         zone: d.Zone || '',
-        order_status: d.OrderStatus || '',
+        // If we already marked an order as Routed locally, don't let upstream overwrite it
+        order_status: (existingStatusByOrderNumber[String(d.OrderNumber)] || '').toLowerCase() === 'routed'
+          ? 'Routed'
+          : (d.OrderStatus || ''),
         show_route: d.ShowRoute || '',
         address_verified: d.AddressVerified || '',
         order_reviewed: d.OrderReveiwed === 1 || d.OrderReveiwed === true || false,
@@ -458,12 +610,25 @@ export class SupabaseService {
         address_1: d.ShippingAddress1 || '',
         city: d.ShippingCity || '',
         zip: d.ShippingZip || '',
-        status: d.OrderStatus || '',
         delivery_date: d.OrderShipDate
       };
 
       return record;
     });
+
+    // Debug: Log the first record structure to see what we're trying to insert
+    if (recordsToUpsert.length > 0) {
+      console.log('🔍 First record structure and field lengths:');
+      const firstRecord = recordsToUpsert[0];
+      Object.entries(firstRecord).forEach(([key, value]) => {
+        const valueStr = value?.toString() || 'null';
+        if (valueStr.length > 10) {
+          console.log(`  ⚠️  ${key}: "${valueStr}" (${valueStr.length} chars)`);
+        } else {
+          console.log(`  ✅ ${key}: "${valueStr}" (${valueStr.length} chars)`);
+        }
+      });
+    }
 
     const { data, error, count } = await this.supabase
       .from('quickflora_deliveries')
@@ -474,11 +639,25 @@ export class SupabaseService {
       .select();
 
     if (error) {
-      console.error('Supabase upsert error:', error);
+      console.error('❌ Supabase upsert error:', error);
+      
+      // Check if this is the VARCHAR constraint error
+      if (error.code === '22001') {
+        console.error('🚨 VARCHAR constraint error! Some database fields are still too small.');
+        console.error('💡 Run this SQL in Supabase to check remaining VARCHAR(10) fields:');
+        console.error('SELECT column_name, data_type, character_maximum_length FROM information_schema.columns WHERE table_name = \'quickflora_deliveries\' AND character_maximum_length = 10;');
+        
+        // Log more details about the constraint error
+        console.log('📦 Database constraint error - need to fix field mappings');
+      }
+      
       return { added: 0, updated: 0, failed: deliveries.length };
     }
     
-    const successfulCount = count || 0;
+    const successfulCount = data?.length || count || 0;
+    console.log(`✅ Successfully upserted ${successfulCount} records to Supabase`);
+    console.log(`📝 Response data length: ${data?.length || 0}, Count: ${count}`);
+    
     return { added: successfulCount, updated: 0, failed: deliveries.length - successfulCount };
   }
 } 

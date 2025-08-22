@@ -112,6 +112,7 @@ export class DeliveryService {
     status?: string;
     limit?: number;
     offset?: number;
+    locationId?: string;
     userContext?: {
       sessionId: string;
       userId: string;
@@ -146,7 +147,7 @@ export class DeliveryService {
         departmentID: "DEFAULT",
         fromDate: targetDate,
         toDate: targetDate,
-        locationID: "DEFAULT",
+        locationID: params.locationId || "",
         wholesaleLocationID: true,
         zoneID: "",
         sortExpression: "",
@@ -205,7 +206,7 @@ export class DeliveryService {
     userId: string;
     companyId: string;
     employeeId: string;
-  }, status?: string): Promise<any[]> {
+  }, status?: string, locationId?: string): Promise<any[]> {
     // Require user context
     if (!userContext || !userContext.sessionId || !userContext.companyId) {
       throw new Error('Authentication required - user context missing');
@@ -217,7 +218,8 @@ export class DeliveryService {
       toDate: date,
       status: status, // Use provided status or undefined for all
       limit: limit,
-      userContext: userContext
+      userContext: userContext,
+      locationId
     });
 
     // Then fetch from Supabase filtered by user's company
@@ -226,7 +228,8 @@ export class DeliveryService {
       toDate: date,
       status: status, // Use provided status or undefined for all
       limit: limit,
-      companyId: userContext.companyId // Re-enabled company filtering
+      companyId: userContext.companyId, // Re-enabled company filtering
+      locationId
     });
   }
 
@@ -788,6 +791,7 @@ export class DeliveryService {
     startDate?: string;
     startTime?: string;
     serviceTimeMinutes?: number;
+    locationId?: string;
     userContext?: {
       sessionId: string;
       userId: string;
@@ -810,7 +814,7 @@ export class DeliveryService {
           throw new Error('Authentication required for single date filtering');
         }
         
-        deliveries = await this.getDeliveriesForDate(params.fromDate, params.limit || 200, params.userContext);
+        deliveries = await this.getDeliveriesForDate(params.fromDate, params.limit || 200, params.userContext, undefined, params.locationId);
       } else {
         // Date range or other criteria - use the original logic but with consistent status
         // Using date range filtering
@@ -822,7 +826,8 @@ export class DeliveryService {
             toDate: params.toDate,
             status: 'Booked',
             limit: params.limit || 200,
-            userContext: params.userContext
+            userContext: params.userContext,
+            locationId: params.locationId
           });
         }
         
@@ -833,7 +838,8 @@ export class DeliveryService {
           status: 'Booked', // Only fetch Booked status
           limit: params.limit || 200, // Use same default limit as pending endpoint
           offset: params.offset || 0,
-          companyId: params.userContext?.companyId // Filter by company if user context available
+          companyId: params.userContext?.companyId, // Filter by company if user context available
+          locationId: params.locationId
         });
       }
 
@@ -844,7 +850,7 @@ export class DeliveryService {
       // Found deliveries to optimize
 
       // Step 2: Get depot address (shop location)
-      const shopLocation = await this.supabaseService.getShopLocation();
+      const shopLocation = await this.supabaseService.getShopLocation(params.userContext?.companyId || '216 W State St, Geneva, IL 60134');
       const depotAddress = params.depotAddress || shopLocation;
 
       // Step 3: Convert deliveries to optimization format

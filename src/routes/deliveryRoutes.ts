@@ -34,4 +34,7 @@ router.get('/:id', DeliveryController.getDeliveryById);
 // Update delivery status
 router.patch('/:id/status', DeliveryController.updateDeliveryStatus);
 
+// Bulk update delivery statuses
+router.patch('/bulk-update-status', DeliveryController.bulkUpdateDeliveryStatus);
+
 export default router;
