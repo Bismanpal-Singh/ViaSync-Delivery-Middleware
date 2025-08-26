@@ -18,6 +18,8 @@ export interface DeliveryLocation {
   };
   deliveryIds?: string[]; // List of merged delivery IDs
   coords?: { lat: number; lon: number }; // Geocoded coordinates for merged deliveries
+  originalDelivery?: any; // Original delivery data from database
+  originalDeliveries?: any[]; // Array of original delivery data for merged stops
 }
 
 export interface DeliveryRequest {
@@ -47,6 +49,17 @@ export interface DeliveryRoute {
       end: string;
     };
     deliveryIds?: string[];
+    orders?: Array<{
+      id: number;
+      customer_name: string;
+      order_number: string;
+      status: string;
+      address_1?: string;
+      city?: string;
+      zip?: string;
+      priority_start_time?: string;
+      priority_end_time?: string;
+    }>;
   }>;
   departureTime: string;
   totalDistance: number;
@@ -233,12 +246,12 @@ export class DeliveryService {
     });
   }
 
-  private timeToMinutes(timeStr: string): number {
+  public timeToMinutes(timeStr: string): number {
     const [hours, minutes] = timeStr.split(':').map(Number);
     return hours * 60 + minutes;
   }
 
-  private minutesToTime(minutes: number): string {
+  public minutesToTime(minutes: number): string {
     const hours = Math.floor(minutes / 60);
     const mins = minutes % 60;
     return `${hours.toString().padStart(2, '0')}:${mins.toString().padStart(2, '0')}`;
@@ -472,6 +485,8 @@ export class DeliveryService {
     const merged: {[key: string]: DeliveryLocation} = {};
     const coordToIds: {[key: string]: string[]} = {};
     const coordToWindows: {[key: string]: {start: string[], end: string[]}} = {};
+    const coordToOriginalDeliveries: {[key: string]: any[]} = {};
+    
     deliveries.forEach((delivery, idx) => {
       const coords = geocodedAddresses[idx];
       // Use rounded lat/lon as key (to avoid floating point issues)
@@ -482,15 +497,19 @@ export class DeliveryService {
           address: delivery.address,
           timeWindow: { start: delivery.timeWindow.start, end: delivery.timeWindow.end },
           deliveryIds: [delivery.id],
-          coords // attach coords for later use
+          coords, // attach coords for later use
+          originalDeliveries: [delivery.originalDelivery] // store original delivery data
         };
         coordToIds[key] = [delivery.id];
         coordToWindows[key] = { start: [delivery.timeWindow.start], end: [delivery.timeWindow.end] };
+        coordToOriginalDeliveries[key] = [delivery.originalDelivery];
       } else {
         merged[key].deliveryIds!.push(delivery.id);
         coordToIds[key].push(delivery.id);
         coordToWindows[key].start.push(delivery.timeWindow.start);
         coordToWindows[key].end.push(delivery.timeWindow.end);
+        merged[key].originalDeliveries!.push(delivery.originalDelivery);
+        coordToOriginalDeliveries[key].push(delivery.originalDelivery);
       }
     });
     // Combine time windows for merged stops
@@ -678,13 +697,28 @@ export class DeliveryService {
             const solverArrivalTime = this.calculateArrivalTime(solverRoute, stopIndex, timeMatrix);
             const actualArrivalTime = solverArrivalTime - serviceTimeMinutes; // Subtract service time to get actual arrival
             const departureTime = actualArrivalTime + serviceTimeMinutes; // Add service time for departure
+            
+            // Create orders array from original delivery data
+            const orders = delivery.originalDeliveries?.map((originalDelivery: any) => ({
+              id: originalDelivery.id,
+              customer_name: originalDelivery.customer_name || originalDelivery.shipping_name || 'Unknown',
+              order_number: originalDelivery.order_number || 'N/A',
+              status: originalDelivery.order_status || originalDelivery.status || 'Unknown',
+              address_1: originalDelivery.address_1 || originalDelivery.shipping_address1,
+              city: originalDelivery.city || originalDelivery.shipping_city,
+              zip: originalDelivery.zip || originalDelivery.shipping_zip,
+              priority_start_time: originalDelivery.priority_start_time,
+              priority_end_time: originalDelivery.priority_end_time
+            })) || [];
+            
             return {
               locationId: delivery.id,
               address: delivery.address,
               arrivalTime: this.minutesToTime(actualArrivalTime),
               departureTime: this.minutesToTime(departureTime),
               timeWindow: delivery.timeWindow,
-              deliveryIds: delivery.deliveryIds // include all merged delivery IDs
+              deliveryIds: delivery.deliveryIds, // include all merged delivery IDs
+              orders: orders // include the orders array
             };
           }
         });
@@ -814,7 +848,7 @@ export class DeliveryService {
           throw new Error('Authentication required for single date filtering');
         }
         
-        deliveries = await this.getDeliveriesForDate(params.fromDate, params.limit || 200, params.userContext, undefined, params.locationId);
+        deliveries = await this.getDeliveriesForDate(params.fromDate, params.limit || 200, params.userContext, params.status, params.locationId);
       } else {
         // Date range or other criteria - use the original logic but with consistent status
         // Using date range filtering
@@ -824,7 +858,7 @@ export class DeliveryService {
           await this.syncDeliveriesFromQuickFlora({
             fromDate: params.fromDate,
             toDate: params.toDate,
-            status: 'Booked',
+            status: params.status || 'Booked',
             limit: params.limit || 200,
             userContext: params.userContext,
             locationId: params.locationId
@@ -835,7 +869,7 @@ export class DeliveryService {
         deliveries = await this.supabaseService.getDeliveries({
           fromDate: params.fromDate,
           toDate: params.toDate,
-          status: 'Booked', // Only fetch Booked status
+          status: params.status || 'Booked', // Use provided status or default to 'Booked'
           limit: params.limit || 200, // Use same default limit as pending endpoint
           offset: params.offset || 0,
           companyId: params.userContext?.companyId, // Filter by company if user context available
@@ -849,26 +883,23 @@ export class DeliveryService {
 
       // Found deliveries to optimize
 
-      // Step 2: Get depot address (shop location)
-      const shopLocation = await this.supabaseService.getShopLocation(params.userContext?.companyId || '216 W State St, Geneva, IL 60134');
+      // Step 2: Get depot address (shop location) - use locationId as city if available
+      const shopLocation = await this.supabaseService.getShopLocation(
+        params.userContext?.companyId, 
+        params.locationId // Use locationId as city parameter
+      );
       const depotAddress = params.depotAddress || shopLocation;
 
       // Step 3: Convert deliveries to optimization format
       const deliveryLocations: DeliveryLocation[] = deliveries.map((delivery, index) => {
-        // Handle time windows with minimum width
+        // Handle time windows from database format
         let startTime = delivery.priority_start_time || '09:00';
         let endTime = delivery.priority_end_time || '17:00';
         
-        // If start and end times are the same, it means "any time after start time"
+        // If start and end times are the same, it means "any time during the day" (no priority window)
         if (startTime === endTime) {
-          endTime = '23:59'; // Set to end of day
-        }
-        
-        // Ensure minimum 30-minute window
-        const startMinutes = this.timeToMinutes(startTime);
-        const endMinutes = this.timeToMinutes(endTime);
-        if (endMinutes - startMinutes < 30) {
-          endTime = this.minutesToTime(Math.min(1440, startMinutes + 30));
+          startTime = '07:00'; // Start of business day
+          endTime = '23:59';   // End of day
         }
         
         return {
@@ -877,7 +908,8 @@ export class DeliveryService {
           timeWindow: {
             start: startTime,
             end: endTime
-          }
+          },
+          originalDelivery: delivery // Store the original delivery data
         };
       });
 

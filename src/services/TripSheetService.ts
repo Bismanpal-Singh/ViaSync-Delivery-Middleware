@@ -130,6 +130,7 @@ export class TripSheetService {
       current_mileage: Math.round(params.optimizationResult.totalDistance / 1609.34),
       dispatcher: params.createdBy,
       route_date: params.deliveryDate,
+      company_id: params.companyId,
       mileage: `${Math.round(params.optimizationResult.totalDistance / 1609.34)} miles`,
       service_time_minutes: params.serviceTimeMinutes || 10,
       orders: this.formatOrdersForTripSheet(params.optimizationResult.routes)
@@ -174,11 +175,12 @@ export class TripSheetService {
   /**
    * Get trip sheet by ID
    */
-  async getTripSheet(tripSheetId: string): Promise<TripSheet | null> {
+  async getTripSheet(tripSheetId: string, companyId: string): Promise<TripSheet | null> {
     const { data: tripSheet, error: sheetError } = await this.supabase
       .from('trip_sheets')
       .select('*')
       .eq('id', tripSheetId)
+      .eq('company_id', companyId)
       .single();
 
     if (sheetError || !tripSheet) return null;
@@ -193,6 +195,7 @@ export class TripSheetService {
     const { data: tripSheets, error } = await this.supabase
       .from('trip_sheets')
       .select('*')
+      .eq('company_id', companyId)
       .order('created_at', { ascending: false });
 
     if (error) throw new Error(`Failed to get trip sheets: ${error.message}`);
@@ -232,6 +235,7 @@ export class TripSheetService {
     const { data: tripSheets, error } = await this.supabase
       .from('trip_sheets')
       .select('*')
+      .eq('company_id', params.companyId)
       .eq('route_date', params.date)
       .order('created_at', { ascending: false });
 
@@ -321,7 +325,7 @@ export class TripSheetService {
       vehicleName: tripSheet.vehicle || 'Unassigned',
       deliveryDate: tripSheet.route_date,
       startTime: tripSheet.start_time || '08:00',
-      depotAddress: await this.supabaseService.getShopLocation(tripSheet.company_id || undefined),
+              depotAddress: await this.supabaseService.getShopLocation(tripSheet.company_id || undefined, tripSheet.location_id),
       totalStops: tripSheet.total_stops || orders.length,
       completedStops: completedStops,
       status: tripSheet.status || 'active',

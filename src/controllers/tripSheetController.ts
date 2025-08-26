@@ -82,7 +82,7 @@ export const getTripSheet = async (req: Request, res: Response): Promise<void> =
   }
 
   try {
-    const tripSheet = await tripSheetService.getTripSheet(tripSheetId);
+    const tripSheet = await tripSheetService.getTripSheet(tripSheetId, userContext.companyId);
     
     if (!tripSheet) {
       res.status(404).json({
@@ -250,6 +250,8 @@ export const updateTripSheet = async (req: Request, res: Response): Promise<void
  */
 export const deleteTripSheet = async (req: Request, res: Response): Promise<void> => {
   const { tripSheetId } = req.params;
+  const updateStatus = (req.query.updateStatus as string | undefined)?.toLowerCase() as 'booked' | 'delivered' | 'none' | undefined;
+  const orderIdsParam = req.query.orderIds as string | undefined;
   const userContext = req.user;
 
   if (!userContext) {
@@ -260,11 +262,45 @@ export const deleteTripSheet = async (req: Request, res: Response): Promise<void
     return;
   }
 
+  // Parse orderIds from query parameter
+  let orderIds: number[] = [];
+  if (orderIdsParam) {
+    try {
+      orderIds = JSON.parse(orderIdsParam);
+    } catch (error) {
+      res.status(400).json({
+        success: false,
+        error: 'Invalid orderIds format. Expected JSON array.',
+        message: 'Invalid orderIds parameter'
+      });
+      return;
+    }
+  }
+
   try {
+    // Load the trip sheet (scoped by company) to verify ownership
+    const sheet = await tripSheetService.getTripSheet(tripSheetId, userContext.companyId);
+    if (!sheet) {
+      res.status(404).json({ success: false, error: 'Trip sheet not found' });
+      return;
+    }
+
+    let statusResult: { updated: number; failed: number } | null = null;
+    if (orderIds.length > 0 && updateStatus && updateStatus !== 'none') {
+      const target = updateStatus === 'booked' ? 'Booked' : 'Delivered';
+      statusResult = await tripSheetService['supabaseService'].updateOrderStatus(orderIds.map(String), target);
+    }
+
     await tripSheetService.deleteTripSheet(tripSheetId);
 
     res.json({
       success: true,
+      data: {
+        deleted: true,
+        updated: statusResult?.updated || 0,
+        failed: statusResult?.failed || 0,
+        updateStatus: updateStatus || 'none'
+      },
       message: 'Trip sheet deleted successfully'
     });
 

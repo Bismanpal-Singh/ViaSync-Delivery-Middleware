@@ -28,6 +28,8 @@ router.get('/pending', DeliveryController.getAllDeliveries);
 // Get dashboard statistics
 router.get('/dashboard-stats', DeliveryController.getDashboardStats);
 
+
+
 // Get a single delivery by ID
 router.get('/:id', DeliveryController.getDeliveryById);
 

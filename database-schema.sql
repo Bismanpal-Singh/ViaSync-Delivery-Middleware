@@ -98,6 +98,29 @@ ALTER TABLE deliveries ENABLE ROW LEVEL SECURITY;
 ALTER TABLE trip_sheets ENABLE ROW LEVEL SECURITY;
 ALTER TABLE trip_sheet_orders ENABLE ROW LEVEL SECURITY;
 
+-- Company Locations table for multiple shop locations
+CREATE TABLE IF NOT EXISTS company_locations (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    company_id VARCHAR(100) NOT NULL,
+    location_name VARCHAR(255) NOT NULL,
+    address TEXT NOT NULL,
+    city VARCHAR(100) NOT NULL,
+    state VARCHAR(10) NOT NULL,
+    zip_code VARCHAR(20) NOT NULL,
+    is_active BOOLEAN DEFAULT true,
+    is_default BOOLEAN DEFAULT false,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- Create indexes for company_locations
+CREATE INDEX IF NOT EXISTS idx_company_locations_company_id ON company_locations(company_id);
+CREATE INDEX IF NOT EXISTS idx_company_locations_city ON company_locations(city);
+CREATE INDEX IF NOT EXISTS idx_company_locations_is_active ON company_locations(is_active);
+
+-- Enable RLS for company_locations
+ALTER TABLE company_locations ENABLE ROW LEVEL SECURITY;
+
 -- Create RLS policies (basic example - adjust based on your auth needs)
 CREATE POLICY "Enable read access for all users" ON deliveries FOR SELECT USING (true);
 CREATE POLICY "Enable insert access for authenticated users" ON deliveries FOR INSERT WITH CHECK (true);
@@ -109,4 +132,8 @@ CREATE POLICY "Enable update access for authenticated users" ON trip_sheets FOR 
 
 CREATE POLICY "Enable read access for all users" ON trip_sheet_orders FOR SELECT USING (true);
 CREATE POLICY "Enable insert access for authenticated users" ON trip_sheet_orders FOR INSERT WITH CHECK (true);
-CREATE POLICY "Enable update access for authenticated users" ON trip_sheet_orders FOR UPDATE USING (true); 
+CREATE POLICY "Enable update access for authenticated users" ON trip_sheet_orders FOR UPDATE USING (true);
+
+CREATE POLICY "Enable read access for all users" ON company_locations FOR SELECT USING (true);
+CREATE POLICY "Enable insert access for authenticated users" ON company_locations FOR INSERT WITH CHECK (true);
+CREATE POLICY "Enable update access for authenticated users" ON company_locations FOR UPDATE USING (true); 

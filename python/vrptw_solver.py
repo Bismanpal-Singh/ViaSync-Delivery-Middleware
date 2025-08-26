@@ -21,9 +21,9 @@ def create_data_model(input_data):
 def solve_vrptw(data):
     # Configuration
     SERVICE_TIME_SECONDS = 600  # 10 minutes service time at delivery locations
-    SLACK_MAX_SECONDS = 30 * 60  # 30 minutes maximum slack
+    SLACK_MAX_SECONDS = 60 * 60  # 60 minutes maximum slack (increased from 30)
     MAX_TIME_SECONDS = 24 * 60 * 60  # 24 hours maximum
-    SOLVER_TIME_LIMIT_SECONDS = 15  # 15 seconds solver time limit
+    SOLVER_TIME_LIMIT_SECONDS = 30  # 30 seconds solver time limit (increased from 15)
     
     manager = pywrapcp.RoutingIndexManager(
         len(data["distance_matrix"]),
@@ -101,8 +101,25 @@ def solve_vrptw(data):
     search_params.local_search_metaheuristic = (
         routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH)
     search_params.time_limit.seconds = SOLVER_TIME_LIMIT_SECONDS
-
+    
+    # Add more flexible search strategies if the first one fails
+    search_params.first_solution_strategy = (
+        routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC)
+    
+    # Try multiple solution strategies if the first one fails
     solution = routing.SolveWithParameters(search_params)
+    
+    if not solution:
+        # Try with a different strategy
+        search_params.first_solution_strategy = (
+            routing_enums_pb2.FirstSolutionStrategy.SAVINGS)
+        solution = routing.SolveWithParameters(search_params)
+    
+    if not solution:
+        # Try with another strategy
+        search_params.first_solution_strategy = (
+            routing_enums_pb2.FirstSolutionStrategy.SWEEP)
+        solution = routing.SolveWithParameters(search_params)
 
     if not solution:
         return {"error": "No feasible solution found."}

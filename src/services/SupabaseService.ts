@@ -318,7 +318,7 @@ export class SupabaseService {
   }
 
   // Method to get shop location from company_locations table
-  async getShopLocation(companyId?: string): Promise<string> {
+  async getShopLocation(companyId?: string, city?: string): Promise<string> {
     const fallbackAddress = 'Town & Country Gardens Geneva, 216 W State St, Geneva, IL 60134';
     
     try {
@@ -327,14 +327,20 @@ export class SupabaseService {
         return fallbackAddress;
       }
 
-      console.log(`🏪 Fetching shop location for company: ${companyId}`);
+
       
-      // Try different possible field names for company ID
-      const { data, error } = await this.supabase
+      let query = this.supabase
         .from('company_locations')
         .select('*')
-        .or(`company_id.eq.${companyId},id.eq.${companyId},name.eq.${companyId}`)
-        .limit(1);
+        .eq('location_name', companyId) // Use location_name to store company_id
+        .eq('is_active', true);
+
+      // If city is specified, filter by city column
+      if (city) {
+        query = query.eq('city', city);
+      }
+
+      const { data, error } = await query.order('created_at', { ascending: false }).limit(1);
 
       if (error) {
         console.error('❌ Error fetching company location:', error);
@@ -342,25 +348,17 @@ export class SupabaseService {
         return fallbackAddress;
       }
 
-      if (data && data.length > 0) {
-        const location = data[0];
-        // Try different possible field combinations
-        const companyName = location.company_name || location.name || 'Town & Country Gardens Geneva';
-        const address = location.address || location.street || location.address1 || '216 W State St';
-        const city = location.city || 'Geneva';
-        const state = location.state || 'IL';
-        const zip = location.zip || location.zipcode || '60134';
-        
-        const fullAddress = `${companyName}, ${address}, ${city}, ${state} ${zip}`;
-        console.log(`✅ Using company location: ${fullAddress}`);
+              if (data && data.length > 0) {
+          const location = data[0];
+                  const fullAddress = this.formatShopAddress(location);
         return fullAddress;
-      } else {
-        console.warn(`⚠️ No location found for company ${companyId}, using fallback`);
-        return fallbackAddress;
-      }
+        } else {
+  
+          return fallbackAddress;
+        }
     } catch (error) {
       console.error('❌ Error in getShopLocation:', error);
-      console.log(`❌ Using fallback due to error: ${fallbackAddress}`);
+
       return fallbackAddress;
     }
   }
@@ -480,6 +478,8 @@ export class SupabaseService {
         .from('quickflora_deliveries')
         .update({ 
           order_status: newStatus,
+          // Keep legacy column in sync for any consumers still reading `status`
+          status: newStatus,
           updated_at: new Date().toISOString()
         })
         .in('id', numericOrderIds)

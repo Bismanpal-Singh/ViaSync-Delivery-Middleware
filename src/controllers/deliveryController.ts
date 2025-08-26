@@ -31,12 +31,29 @@ try {
 }
 
 export const optimizeDelivery = async (req: Request, res: Response): Promise<void> => {
-  const { depotAddress, deliveries, vehicleCapacities } = req.body;
+  const { 
+    depotAddress, 
+    deliveries, 
+    vehicleCapacities, 
+    serviceTimeMinutes,
+    fromDate,
+    toDate,
+    startDate,
+    startTime,
+    limit,
+    offset
+  } = req.body;
 
-  if (!depotAddress || !deliveries || !vehicleCapacities) {
+
+
+  if (!deliveries || !vehicleCapacities) {
     res.status(400).json({
       success: false,
-      error: 'Missing required fields: depotAddress, deliveries, or vehicleCapacities'
+      error: 'Missing required fields: deliveries or vehicleCapacities',
+      debug: {
+        hasDeliveries: !!deliveries,
+        hasVehicleCapacities: !!vehicleCapacities
+      }
     });
     return;
   }
@@ -44,18 +61,95 @@ export const optimizeDelivery = async (req: Request, res: Response): Promise<voi
   if (deliveries.length === 0 || !Array.isArray(vehicleCapacities) || vehicleCapacities.length === 0) {
     res.status(400).json({
       success: false,
-      error: 'At least one delivery and a non-empty vehicleCapacities array are required'
+      error: 'At least one delivery and a non-empty vehicleCapacities array are required',
+      debug: {
+        deliveriesLength: deliveries?.length,
+        isVehicleCapacitiesArray: Array.isArray(vehicleCapacities),
+        vehicleCapacitiesLength: vehicleCapacities?.length
+      }
     });
     return;
   }
 
   try {
-    // Optimizing deliveries
+    // Convert frontend delivery format to optimization format
+    let optimizationDeliveries: any[];
+    try {
+      optimizationDeliveries = deliveries.map((delivery: any) => {
+        // Handle the exact format the frontend is sending
+        const deliveryId = delivery.id?.toString();
+        
+        // Build address from individual fields (frontend format)
+        const address = delivery.address_1 && delivery.city && delivery.zip ? 
+          `${delivery.address_1}, ${delivery.city}, ${delivery.zip}` : 
+          delivery.address || delivery.shipping_address1 || 'Unknown Address';
+        
+        // Handle time windows from frontend format
+        let startTime = delivery.priority_start_time || '09:00';
+        let endTime = delivery.priority_end_time || '17:00';
+        
+        // If start and end times are the same, it means "any time during the day" (no priority window)
+        if (startTime === endTime) {
+          startTime = '07:00'; // Start of business day
+          endTime = '23:59';   // End of day
+        }
 
+        return {
+          id: deliveryId || `delivery-${Math.random()}`,
+          address: address,
+          timeWindow: {
+            start: startTime,
+            end: endTime
+          },
+          originalDelivery: delivery // Preserve original data for orders array
+        };
+      });
+    } catch (conversionError) {
+      console.error('❌ Error converting deliveries:', conversionError);
+      res.status(400).json({
+        success: false,
+        error: 'Failed to convert delivery data format',
+        message: 'Error processing delivery data'
+      });
+      return;
+    }
+
+
+
+    // Validate converted deliveries
+    const invalidDeliveries = optimizationDeliveries.filter((d: any) => !d.address || d.address === 'Unknown Address');
+    if (invalidDeliveries.length > 0) {
+      console.error('❌ Invalid deliveries found:', invalidDeliveries);
+      res.status(400).json({
+        success: false,
+        error: `${invalidDeliveries.length} deliveries have invalid addresses`,
+        message: 'Some deliveries could not be processed due to missing address information'
+      });
+      return;
+    }
+
+    // Get depot address - use provided one or get from shop location
+    let finalDepotAddress = depotAddress;
+    if (!finalDepotAddress) {
+      // If no depot address provided, get it from the user context or use default
+      // For now, we'll use a default since we don't have user context in this endpoint
+      finalDepotAddress = 'GTS Flowers Inc, 8002 Concord Hwy, Monroe, NC 28110';
+    }
+
+    console.log('🔍 OPTIMIZE DEBUG: Using depot address:', finalDepotAddress);
+    console.log('🔍 OPTIMIZE DEBUG: Calling optimization service with:', {
+      depotAddress: finalDepotAddress,
+      deliveryCount: optimizationDeliveries.length,
+      vehicleCapacities,
+      serviceTimeMinutes: serviceTimeMinutes || 10
+    });
+
+    // Optimizing deliveries
     const result = await deliveryService.optimizeDeliveryRoutes({
-      depotAddress,
-      deliveries,
-      vehicleCapacities
+      depotAddress: finalDepotAddress,
+      deliveries: optimizationDeliveries,
+      vehicleCapacities,
+      serviceTimeMinutes: serviceTimeMinutes || 10
     });
 
     res.json({
@@ -65,11 +159,16 @@ export const optimizeDelivery = async (req: Request, res: Response): Promise<voi
     });
 
   } catch (error) {
-    console.error('Route optimization failed:', error);
+    console.error('❌ Route optimization failed:', error);
+    console.error('❌ Error stack:', error instanceof Error ? error.stack : 'No stack trace');
     res.status(500).json({
       success: false,
       error: error instanceof Error ? error.message : 'Unknown error occurred',
-      message: 'Failed to optimize delivery routes'
+      message: 'Failed to optimize delivery routes',
+      debug: {
+        errorType: error?.constructor?.name,
+        errorMessage: error instanceof Error ? error.message : String(error)
+      }
     });
   }
 };
@@ -277,6 +376,8 @@ export const getAllDeliveries = async (req: Request, res: Response): Promise<voi
     });
   }
 };
+
+
 
 export const getDeliveryById = async (req: Request, res: Response): Promise<void> => {
   const deliveryId = parseInt(req.params.id);
