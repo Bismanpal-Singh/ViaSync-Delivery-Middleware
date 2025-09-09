@@ -153,14 +153,17 @@ export class SupabaseService {
         query = query.range(params.offset, (params.offset + (params.limit || 10)) - 1);
       }
 
-      console.log(`🔍 Querying Supabase with params:`, {
-        fromDate: params.fromDate,
-        toDate: params.toDate,
-        status: params.status,
-        companyId: params.companyId,
-        locationId: params.locationId,
-        limit: params.limit
-      });
+      // Query parameters logged only in development
+      if (process.env.NODE_ENV === 'development') {
+        console.log(`🔍 Querying Supabase with params:`, {
+          fromDate: params.fromDate,
+          toDate: params.toDate,
+          status: params.status,
+          companyId: params.companyId,
+          locationId: params.locationId,
+          limit: params.limit
+        });
+      }
 
       const { data, error } = await query;
 
@@ -169,14 +172,17 @@ export class SupabaseService {
         throw new Error(`Failed to fetch deliveries: ${error.message}`);
       }
 
-      console.log(`📊 Query returned ${data?.length || 0} records`);
-      if (data && data.length > 0) {
-        console.log(`📝 First record sample:`, {
-          order_number: data[0].order_number,
-          order_ship_date: data[0].order_ship_date,
-          company_id: data[0].company_id,
-          order_status: data[0].order_status
-        });
+      // Record count and sample logged only in development
+      if (process.env.NODE_ENV === 'development') {
+        console.log(`📊 Query returned ${data?.length || 0} records`);
+        if (data && data.length > 0) {
+          console.log(`📝 First record sample:`, {
+            order_number: data[0].order_number,
+            order_ship_date: data[0].order_ship_date,
+            company_id: data[0].company_id,
+            order_status: data[0].order_status
+          });
+        }
       }
 
       return data || [];
@@ -494,23 +500,25 @@ export class SupabaseService {
       const successfulCount = data?.length || 0;
       console.log(`✅ Updated ${successfulCount} orders to "${newStatus}"`);
       
-      // Verify the updates persisted by re-reading the records
-      const { data: verifyRecords, error: verifyError } = await this.supabase
-        .from('quickflora_deliveries')
-        .select('id, order_number, order_status')
-        .in('id', numericOrderIds);
+      // Verify the updates persisted by re-reading the records (development only)
+      if (process.env.NODE_ENV === 'development') {
+        const { data: verifyRecords, error: verifyError } = await this.supabase
+          .from('quickflora_deliveries')
+          .select('id, order_number, order_status')
+          .in('id', numericOrderIds);
 
-      if (!verifyError && verifyRecords) {
-        console.log(`🔍 Verification after update:`);
-        verifyRecords.forEach(record => {
-          console.log(`  - ID: ${record.id}, Order: ${record.order_number}, Status: ${record.order_status}`);
-        });
+        if (!verifyError && verifyRecords) {
+          console.log(`🔍 Verification after update:`);
+          verifyRecords.forEach(record => {
+            console.log(`  - ID: ${record.id}, Order: ${record.order_number}, Status: ${record.order_status}`);
+          });
+        }
       }
       
       return { 
         updated: successfulCount, 
         failed: orderIds.length - successfulCount,
-        records: verifyRecords || []
+        records: []
       };
     } catch (error) {
       console.error('❌ Failed to update order statuses:', error);
@@ -616,8 +624,8 @@ export class SupabaseService {
       return record;
     });
 
-    // Debug: Log the first record structure to see what we're trying to insert
-    if (recordsToUpsert.length > 0) {
+    // Debug: Log record structure only in development
+    if (process.env.NODE_ENV === 'development' && recordsToUpsert.length > 0) {
       console.log('🔍 First record structure and field lengths:');
       const firstRecord = recordsToUpsert[0];
       Object.entries(firstRecord).forEach(([key, value]) => {

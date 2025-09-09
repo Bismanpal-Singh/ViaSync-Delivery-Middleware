@@ -10,13 +10,13 @@ export const config = {
     serviceKey: process.env.SUPABASE_SERVICE_ROLE_KEY || '',
   },
   
-  // Uber API credentials
-  uber: {
-    clientId: process.env.UBER_CLIENT_ID || '',
-    clientSecret: process.env.UBER_CLIENT_SECRET || '',
-    customerId: process.env.UBER_CUSTOMER_ID || '',
-    baseUrl: process.env.UBER_BASE_URL || 'https://api.uber.com/v1',
-  },
+  // Uber API credentials - DISABLED (UberService is not implemented)
+  // uber: {
+  //   clientId: process.env.UBER_CLIENT_ID || '',
+  //   clientSecret: process.env.UBER_CLIENT_SECRET || '',
+  //   customerId: process.env.UBER_CUSTOMER_ID || '',
+  //   baseUrl: process.env.UBER_BASE_URL || 'https://api.uber.com/v1',
+  // },
   
   // Shop configuration
   shop: {
@@ -27,7 +27,7 @@ export const config = {
   // API timeouts
   timeouts: {
     supabase: parseInt(process.env.SUPABASE_TIMEOUT || '10000'),
-    uber: parseInt(process.env.UBER_TIMEOUT || '10000'),
+    // uber: parseInt(process.env.UBER_TIMEOUT || '10000'), // DISABLED - UberService not implemented
   },
 };
 
@@ -36,9 +36,9 @@ export function validateEnvironment(): void {
   const requiredVars = [
     'SUPABASE_URL',
     'SUPABASE_ANON_KEY',
-    'UBER_CLIENT_ID',
-    'UBER_CLIENT_SECRET',
-    'UBER_CUSTOMER_ID',
+    // 'UBER_CLIENT_ID', // DISABLED - UberService not implemented
+    // 'UBER_CLIENT_SECRET', // DISABLED - UberService not implemented
+    // 'UBER_CUSTOMER_ID', // DISABLED - UberService not implemented
   ];
 
   const missingVars = requiredVars.filter(varName => !process.env[varName]);

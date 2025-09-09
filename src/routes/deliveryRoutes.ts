@@ -9,10 +9,6 @@ router.post('/optimize', DeliveryController.optimizeDelivery);
 // Optimize delivery routes from database
 router.post('/optimize-from-database', DeliveryController.optimizeDeliveryFromDatabase);
 
-
-
-
-
 // Health check
 router.get('/health', DeliveryController.healthCheck);
 
@@ -27,8 +23,6 @@ router.get('/pending', DeliveryController.getAllDeliveries);
 
 // Get dashboard statistics
 router.get('/dashboard-stats', DeliveryController.getDashboardStats);
-
-
 
 // Get a single delivery by ID
 router.get('/:id', DeliveryController.getDeliveryById);

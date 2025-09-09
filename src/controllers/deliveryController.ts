@@ -44,8 +44,6 @@ export const optimizeDelivery = async (req: Request, res: Response): Promise<voi
     offset
   } = req.body;
 
-
-
   if (!deliveries || !vehicleCapacities) {
     res.status(400).json({
       success: false,
@@ -113,8 +111,6 @@ export const optimizeDelivery = async (req: Request, res: Response): Promise<voi
       });
       return;
     }
-
-
 
     // Validate converted deliveries
     const invalidDeliveries = optimizationDeliveries.filter((d: any) => !d.address || d.address === 'Unknown Address');
@@ -324,11 +320,14 @@ export const getAllDeliveries = async (req: Request, res: Response): Promise<voi
       }
       
       try {
-        console.log(`🔄 getAllDeliveries: Fetching deliveries for date=${date}, companyId=${userContext.companyId}`);
         // Get deliveries with sync using authenticated user context
         // For the deliveries-by-date endpoint, get all statuses (not just specific status)
         deliveries = await deliveryService.getDeliveriesForDate(date, limit, userContext, undefined, typeof locationId === 'string' ? locationId : undefined);
-        console.log(`📦 getAllDeliveries: Retrieved ${deliveries?.length || 0} deliveries`);
+        
+        // Log delivery count only in development
+        if (process.env.NODE_ENV === 'development') {
+          console.log(`📦 getAllDeliveries: Retrieved ${deliveries?.length || 0} deliveries for date=${date}, companyId=${userContext.companyId}`);
+        }
       } catch (error) {
         console.error('❌ Failed to get deliveries:', error);
         res.status(500).json({
@@ -476,16 +475,22 @@ export const bulkUpdateDeliveryStatus = async (req: Request, res: Response): Pro
   }
 
   try {
-    console.log(`🔄 Bulk updating ${deliveryIds.length} deliveries to status: ${status}`);
+    // Log bulk update only in development
+    if (process.env.NODE_ENV === 'development') {
+      console.log(`🔄 Bulk updating ${deliveryIds.length} deliveries to status: ${status}`);
+    }
     
     // Update statuses in Supabase
     const updateResult = await supabaseService.updateOrderStatus(deliveryIds, status);
     
-    console.log(`✅ Bulk update completed:`, {
-      requested: deliveryIds.length,
-      updated: updateResult.updated,
-      failed: updateResult.failed
-    });
+    // Log bulk update results only in development
+    if (process.env.NODE_ENV === 'development') {
+      console.log(`✅ Bulk update completed:`, {
+        requested: deliveryIds.length,
+        updated: updateResult.updated,
+        failed: updateResult.failed
+      });
+    }
 
     // TODO: If needed, sync status changes back to QuickFlora API
     // This would require implementing a method to update QuickFlora order statuses
@@ -622,6 +627,8 @@ export const getDashboardStats = async (req: Request, res: Response): Promise<vo
 };
 
 // REMOVED: getPendingDeliveriesByDate - functionality merged into getAllDeliveries
+// This function was removed because its functionality was consolidated into getAllDeliveries
+// to avoid code duplication and maintain a single source of truth for delivery fetching
 
 /**
  * Calculate dashboard statistics from delivery data
@@ -653,16 +660,22 @@ function calculateDashboardStats(deliveries: any[]) {
     uniqueDrivers: new Set<string>()
   };
 
-  let debugCounter = 0;
+  // Debug: Log delivery status info only in development
+  if (process.env.NODE_ENV === 'development') {
+    let debugCounter = 0;
+    deliveries.forEach(delivery => {
+      // Debug: Log the first few deliveries to see what fields contain status info
+      if (debugCounter < 3) {
+        console.log(`📊 Debug delivery ${debugCounter + 1}:`, {
+          order_status: delivery.order_status,
+          allStatusFields: Object.keys(delivery).filter(key => key.toLowerCase().includes('status'))
+        });
+      }
+      debugCounter++;
+    });
+  }
+  
   deliveries.forEach(delivery => {
-    // Debug: Log the first few deliveries to see what fields contain status info
-    if (debugCounter < 3) {
-      console.log(`📊 Debug delivery ${debugCounter + 1}:`, {
-        order_status: delivery.order_status,
-        allStatusFields: Object.keys(delivery).filter(key => key.toLowerCase().includes('status'))
-      });
-    }
-    debugCounter++;
     
     // Use only order_status in DB; fallback to OrderStatus from API if present in memory
     const rawStatus = delivery.order_status || delivery.OrderStatus || 'Unknown';
