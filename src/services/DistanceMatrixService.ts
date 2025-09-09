@@ -57,8 +57,10 @@ export class DistanceMatrixService {
         }
       );
 
-      // Log the full raw response for debugging
-              console.log('Compute Route Matrix API response received');
+      // Log API response only in development
+      if (process.env.NODE_ENV === 'development') {
+        console.log('Compute Route Matrix API response received');
+      }
 
       // Reconstruct the NxN matrix from the flat response
       const N = locations.length;

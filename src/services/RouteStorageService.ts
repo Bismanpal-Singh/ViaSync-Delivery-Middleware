@@ -102,7 +102,9 @@ export class RouteStorageService {
       if (err) {
         console.error('❌ Error opening route storage database:', err);
       } else {
-        console.log('✅ Route storage database connected');
+        if (process.env.NODE_ENV === 'development') {
+          console.log('✅ Route storage database connected');
+        }
         this.createTables();
       }
     });
@@ -171,7 +173,9 @@ export class RouteStorageService {
         if (err) {
           console.error('❌ Error creating routes table:', err);
         } else {
-          console.log('✅ Routes table ready');
+          if (process.env.NODE_ENV === 'development') {
+            console.log('✅ Routes table ready');
+          }
         }
       });
 
@@ -179,7 +183,9 @@ export class RouteStorageService {
         if (err) {
           console.error('❌ Error creating route_progress table:', err);
         } else {
-          console.log('✅ Route progress table ready');
+          if (process.env.NODE_ENV === 'development') {
+            console.log('✅ Route progress table ready');
+          }
         }
       });
 
@@ -187,7 +193,9 @@ export class RouteStorageService {
         if (err) {
           console.error('❌ Error creating driver_locations table:', err);
         } else {
-          console.log('✅ Driver locations table ready');
+          if (process.env.NODE_ENV === 'development') {
+            console.log('✅ Driver locations table ready');
+          }
         }
       });
     });
@@ -234,7 +242,9 @@ export class RouteStorageService {
         if (err) {
           reject(err);
         } else {
-          console.log(`✅ Stored route: ${routeData.id}`);
+          if (process.env.NODE_ENV === 'development') {
+            console.log(`✅ Stored route: ${routeData.id}`);
+          }
           resolve();
         }
       });
@@ -387,7 +397,9 @@ export class RouteStorageService {
         if (err) {
           reject(err);
         } else {
-          console.log(`✅ Updated progress: ${routeId} - ${locationId} -> ${status}`);
+          if (process.env.NODE_ENV === 'development') {
+            console.log(`✅ Updated progress: ${routeId} - ${locationId} -> ${status}`);
+          }
           resolve();
         }
       });
@@ -460,7 +472,9 @@ export class RouteStorageService {
         if (err) {
           reject(err);
         } else {
-          console.log(`✅ Updated route status: ${routeId} -> ${status}`);
+          if (process.env.NODE_ENV === 'development') {
+            console.log(`✅ Updated route status: ${routeId} -> ${status}`);
+          }
           resolve();
         }
       });
@@ -550,7 +564,9 @@ export class RouteStorageService {
       if (err) {
         console.error('❌ Error closing route storage database:', err);
       } else {
-        console.log('✅ Route storage database closed');
+        if (process.env.NODE_ENV === 'development') {
+          console.log('✅ Route storage database closed');
+        }
       }
     });
   }

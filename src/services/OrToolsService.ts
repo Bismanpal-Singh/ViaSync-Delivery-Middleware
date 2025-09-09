@@ -60,7 +60,9 @@ export class OrToolsService {
       pythonProcess.on('close', (code) => {
         if (code !== 0) {
           console.error(`[OR-Tools] Solver exited with code ${code}`);
-          console.error(`[OR-Tools] STDERR:\n${stderr}`);
+          if (process.env.NODE_ENV === 'development') {
+            console.error(`[OR-Tools] STDERR:\n${stderr}`);
+          }
           reject(new Error(`Python solver failed (code ${code})`));
           return;
         }
@@ -69,7 +71,10 @@ export class OrToolsService {
           const parsed: VRPTWResult = JSON.parse(stdout);
           resolve(parsed);
         } catch (e) {
-          console.error('[OR-Tools] Failed to parse solver output:', stdout);
+          console.error('[OR-Tools] Failed to parse solver output');
+          if (process.env.NODE_ENV === 'development') {
+            console.error('[OR-Tools] Raw output:', stdout);
+          }
           reject(new Error('Invalid JSON returned from solver'));
         }
       });

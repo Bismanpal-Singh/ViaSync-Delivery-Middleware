@@ -23,7 +23,9 @@ export class GeocodingCacheService {
       if (err) {
         console.error('❌ Error opening geocoding cache database:', err);
       } else {
-        console.log('✅ Geocoding cache database connected');
+        if (process.env.NODE_ENV === 'development') {
+          console.log('✅ Geocoding cache database connected');
+        }
         this.createTable();
       }
     });
@@ -44,7 +46,9 @@ export class GeocodingCacheService {
       if (err) {
         console.error('❌ Error creating geocoding cache table:', err);
       } else {
-        console.log('✅ Geocoding cache table ready');
+        if (process.env.NODE_ENV === 'development') {
+          console.log('✅ Geocoding cache table ready');
+        }
       }
     });
   }
@@ -116,7 +120,9 @@ export class GeocodingCacheService {
       if (err) {
         console.error('❌ Error closing geocoding cache database:', err);
       } else {
-        console.log('✅ Geocoding cache database closed');
+        if (process.env.NODE_ENV === 'development') {
+          console.log('✅ Geocoding cache database closed');
+        }
       }
     });
   }
