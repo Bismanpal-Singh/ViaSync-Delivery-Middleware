@@ -132,13 +132,16 @@ export const optimizeDelivery = async (req: Request, res: Response): Promise<voi
       finalDepotAddress = 'GTS Flowers Inc, 8002 Concord Hwy, Monroe, NC 28110';
     }
 
-    console.log('🔍 OPTIMIZE DEBUG: Using depot address:', finalDepotAddress);
-    console.log('🔍 OPTIMIZE DEBUG: Calling optimization service with:', {
-      depotAddress: finalDepotAddress,
-      deliveryCount: optimizationDeliveries.length,
-      vehicleCapacities,
-      serviceTimeMinutes: serviceTimeMinutes || 10
-    });
+    // Log optimization details only in development
+    if (process.env.NODE_ENV === 'development') {
+      console.log('🔍 OPTIMIZE DEBUG: Using depot address:', finalDepotAddress);
+      console.log('🔍 OPTIMIZE DEBUG: Calling optimization service with:', {
+        depotAddress: finalDepotAddress,
+        deliveryCount: optimizationDeliveries.length,
+        vehicleCapacities,
+        serviceTimeMinutes: serviceTimeMinutes || 10
+      });
+    }
 
     // Optimizing deliveries
     const result = await deliveryService.optimizeDeliveryRoutes({
@@ -716,7 +719,7 @@ function calculateDashboardStats(deliveries: any[]) {
         break;
       default:
         stats.unknown++;
-        if (stats.unknown <= 5) { // Only log first 5 unknown statuses to avoid spam
+        if (process.env.NODE_ENV === 'development' && stats.unknown <= 5) { // Only log first 5 unknown statuses to avoid spam
           console.log(`📊 Unknown status found: "${status}" (original: "${rawStatus}")`);
         }
         break;

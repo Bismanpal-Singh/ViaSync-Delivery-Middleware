@@ -39,7 +39,10 @@ export class QuickFloraTokenManager {
       return this.cachedToken;
     }
 
-    console.log('🔄 Token is missing or expired. Fetching a new one...');
+    // Log token refresh only in development
+    if (process.env.NODE_ENV === 'development') {
+      console.log('🔄 Token is missing or expired. Fetching a new one...');
+    }
     return this.fetchNewToken();
   }
 

@@ -255,7 +255,10 @@ export const updateRouteStatus = async (req: Request, res: Response): Promise<vo
   }
 
   try {
-    console.log(`🔄 Updating route status: ${routeId} -> ${status}`);
+    // Log route status update only in development
+    if (process.env.NODE_ENV === 'development') {
+      console.log(`🔄 Updating route status: ${routeId} -> ${status}`);
+    }
 
     await routeStorageService.updateRouteStatus(routeId, status as 'active' | 'completed' | 'cancelled');
 
